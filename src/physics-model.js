@@ -83,6 +83,16 @@ export const ENVIRONMENT_PRESETS = Object.freeze({
   pan: Object.freeze({ ambient: 24, surface: 58, airflow: 0.2, sunlight: 0, tilt: 2.5, material: "steel" }),
 });
 
+export const FLOW_STABILITY = Object.freeze({
+  donorFraction: 0.50,
+  levelingFraction: 0.10,
+  slopeTransportFraction: 0.012,
+  receiverRoomFraction: 0.90,
+  receiverEpsilon: 2e-5,
+  mobileSfcLow: 0.04,
+  mobileSfcHigh: 0.20,
+});
+
 export const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 export const smoothstep = (edge0, edge1, value) => {
   const x = clamp((value - edge0) / (edge1 - edge0), 0, 1);
@@ -185,6 +195,62 @@ export function yieldStress(temperature) {
   return 50_000 * normalized ** 3;
 }
 
+export function mobileLayerWeight(temperature) {
+  const network = smoothstep(
+    FLOW_STABILITY.mobileSfcLow,
+    FLOW_STABILITY.mobileSfcHigh,
+    solidFatContent(temperature),
+  );
+  const fluidity = 1 - network;
+  return fluidity * fluidity;
+}
+
+export function mobileLayerWeights(temperatures) {
+  const weights = temperatures.map(mobileLayerWeight);
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  return total > 1e-8 ? weights.map((weight) => weight / total) : weights.map(() => 0);
+}
+
+export function mobileLayerState(height, temperatures) {
+  const safeHeight = Math.max(0, height);
+  if (!temperatures.length || safeHeight <= 0) return { depth: 0, temperature: 0 };
+  let weightSum = 0;
+  let weightedTemperature = 0;
+  let meanTemperature = 0;
+  for (const temperature of temperatures) {
+    const weight = mobileLayerWeight(temperature);
+    weightSum += weight;
+    weightedTemperature += weight * temperature;
+    meanTemperature += temperature;
+  }
+  return {
+    depth: safeHeight * weightSum / temperatures.length,
+    temperature: weightSum > 1e-8
+      ? weightedTemperature / weightSum
+      : meanTemperature / temperatures.length,
+  };
+}
+
+export function stabilityLimitedFaceFlux(rawFlux, heightA, heightB, spacing, dt, slope = 0) {
+  if (![rawFlux, heightA, heightB, spacing, dt, slope].every(Number.isFinite)) return 0;
+  if (spacing <= 0 || dt <= 0) return 0;
+  const hA = Math.max(0, heightA);
+  const hB = Math.max(0, heightB);
+  const levelingBudget = FLOW_STABILITY.levelingFraction * Math.abs(hA - hB);
+  const slopeActivation = Math.min(1, Math.abs(slope) * 4);
+  const transportBudget = FLOW_STABILITY.slopeTransportFraction * Math.min(hA, hB) * slopeActivation;
+  const maximumFlux = (levelingBudget + transportBudget) * spacing / Math.max(dt, 1e-6);
+  return clamp(rawFlux, -maximumFlux, maximumFlux);
+}
+
+export function receiverScale(height, localMaximum, dt, incomingRate) {
+  if (![height, localMaximum, dt, incomingRate].every(Number.isFinite)) return 0;
+  if (incomingRate <= 0 || dt <= 0) return 1;
+  const cap = localMaximum + FLOW_STABILITY.receiverEpsilon;
+  const roomRate = FLOW_STABILITY.receiverRoomFraction * Math.max(cap - height, 0) / dt;
+  return clamp(roomRate / incomingRate, 0, 1);
+}
+
 export function radiativeHeatFlux(surfaceTemperature, surroundingsTemperature, emissivity = 0.94) {
   const sigma = 5.670374419e-8;
   const surfaceKelvin = surfaceTemperature + 273.15;
@@ -272,7 +338,7 @@ export function donorScale(height, dt, qRight, qLeft, qUp, qDown, dx, dz) {
   const outgoing = Math.max(qRight, 0) / dx + Math.max(-qLeft, 0) / dx +
     Math.max(qUp, 0) / dz + Math.max(-qDown, 0) / dz;
   if (outgoing <= 0 || height <= 0) return 1;
-  return Math.min(1, 0.9 * height / Math.max(dt * outgoing, 1e-30));
+  return Math.min(1, FLOW_STABILITY.donorFraction * height / Math.max(dt * outgoing, 1e-30));
 }
 
 export function limitedFaceFlux(rawFlux, donorScaleA, donorScaleB) {

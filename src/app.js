@@ -1,4 +1,4 @@
-import { WebGPUButterEngine } from "./webgpu-engine.js";
+import { WebGPUButterEngine } from "./webgpu-engine.js?v=0.6.0";
 import {
   BUTTER,
   DOMAIN,
@@ -10,7 +10,7 @@ import {
   formatSimulationClock,
   solidFatContent,
   transitionFraction,
-} from "./physics-model.js";
+} from "./physics-model.js?v=0.6.0";
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];

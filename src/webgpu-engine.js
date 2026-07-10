@@ -4,14 +4,14 @@ import {
   QUALITY_PROFILES,
   buildInitialState,
   temperatureToEnthalpy,
-} from "./physics-model.js";
-import { backgroundShader, butterShader, computeShader } from "./shaders.js";
+} from "./physics-model.js?v=0.6.0";
+import { backgroundShader, butterShader, computeShader } from "./shaders.js?v=0.6.0";
 
 const STATE_STRIDE_FLOATS = 12;
 const STATE_STRIDE_BYTES = STATE_STRIDE_FLOATS * 4;
 const FLOW_STRIDE_FLOATS = 4;
 const FLOW_STRIDE_BYTES = FLOW_STRIDE_FLOATS * 4;
-const DONOR_SCALE_BYTES = 4;
+const DONOR_SCALE_BYTES = 8;
 const PARAM_BYTES = 7 * 16;
 const SCENE_BYTES = 12 * 16;
 
@@ -155,7 +155,7 @@ function makeIndexData(width, height) {
 }
 
 function makeInitialDonorScales(width, height) {
-  return new Float32Array(width * height).fill(1);
+  return new Float32Array(width * height * 2).fill(1);
 }
 
 export { mat4PerspectiveZO, mat4LookAt, mat4Multiply, mat4Invert, transformPoint };
@@ -306,7 +306,7 @@ export class WebGPUButterEngine {
 
     onProgress("Creating asynchronous GPU pipelines…", 0.50);
     const computePipelineLayout = this.device.createPipelineLayout({ bindGroupLayouts: [this.computeLayout] });
-    [this.rawFluxPipeline, this.donorScalePipeline, this.computePipeline] = await Promise.all([
+    [this.rawFluxPipeline, this.donorScalePipeline, this.receiverScalePipeline, this.computePipeline] = await Promise.all([
       this.device.createComputePipelineAsync({
         label: "BL05 raw face flux pipeline",
         layout: computePipelineLayout,
@@ -316,6 +316,11 @@ export class WebGPUButterEngine {
         label: "BL05 donor scale pipeline",
         layout: computePipelineLayout,
         compute: { module: computeModule, entryPoint: "computeDonorScale" },
+      }),
+      this.device.createComputePipelineAsync({
+        label: "BL05 receiver scale pipeline",
+        layout: computePipelineLayout,
+        compute: { module: computeModule, entryPoint: "computeReceiverScale" },
       }),
       this.device.createComputePipelineAsync({
         label: "BL05 conservative solver pipeline",
@@ -619,6 +624,7 @@ export class WebGPUButterEngine {
       for (const [label, pipeline] of [
         ["raw faces", this.rawFluxPipeline],
         ["donor scale", this.donorScalePipeline],
+        ["receiver scale", this.receiverScalePipeline],
         ["material update", this.computePipeline],
       ]) {
         const pass = encoder.beginComputePass({ label: `BL05 ${label} ${step}` });
@@ -787,7 +793,11 @@ export class WebGPUButterEngine {
       }
       const mapped = new Float32Array(readbackBuffer.getMappedRange());
       const state = mapped.slice(0, byteLength / 4);
-      const donorScale = mapped.slice(byteLength / 4, (byteLength + donorByteLength) / 4);
+      const packedScales = mapped.slice(byteLength / 4, (byteLength + donorByteLength) / 4);
+      const donorScale = new Float32Array(this.profile.width * this.profile.height);
+      for (let index = 0; index < donorScale.length; index += 1) {
+        donorScale[index] = Math.min(packedScales[index * 2], packedScales[index * 2 + 1]);
+      }
       readbackBuffer.unmap();
       return { state, donorScale };
     } catch (error) {

@@ -88,10 +88,10 @@ ${sharedPhysics}
 @group(0) @binding(2) var<storage, read_write> destination: array<Cell>;
 
 struct FlowScratch {
-  values: vec4f, // immutable raw +x/+z fluxes for one substep
+  values: vec4f, // raw +x/+z fluxes, reserved, reserved
 };
 @group(0) @binding(3) var<storage, read_write> flowScratch: array<FlowScratch>;
-@group(0) @binding(4) var<storage, read_write> donorScales: array<f32>;
+@group(0) @binding(4) var<storage, read_write> donorScales: array<vec2f>;
 
 fn width() -> i32 { return i32(params.grid.x); }
 fn height() -> i32 { return i32(params.grid.y); }
@@ -109,12 +109,27 @@ fn cellIndex(x: i32, z: i32) -> u32 {
 fn loadCell(x: i32, z: i32) -> Cell { return source[cellIndex(x, z)]; }
 fn cellHeight(x: i32, z: i32) -> f32 { return loadCell(x, z).geom.x; }
 
-fn meanSolidFat(cell: Cell) -> f32 {
-  var total = 0.0;
+fn mobileLayerWeightAt(cell: Cell, layer: u32) -> f32 {
+  let temperature = enthalpyToTemperature(enthalpyAt(cell, layer));
+  let network = smoothstep(0.04, 0.20, solidFatContent(temperature));
+  let fluidity = 1.0 - network;
+  return fluidity * fluidity;
+}
+
+fn mobileLayerState(cell: Cell) -> vec2f {
+  let layerDepth = max(cell.geom.x, 0.0) * 0.125;
+  var mobileDepth = 0.0;
+  var weightSum = 0.0;
+  var weightedTemperature = 0.0;
   for (var layer = 0u; layer < 8u; layer = layer + 1u) {
-    total += solidFatContent(enthalpyToTemperature(enthalpyAt(cell, layer)));
+    let temperature = enthalpyToTemperature(enthalpyAt(cell, layer));
+    let weight = mobileLayerWeightAt(cell, layer);
+    mobileDepth += layerDepth * weight;
+    weightSum += weight;
+    weightedTemperature += weight * temperature;
   }
-  return total * 0.125;
+  let temperature = select(cell.geom.z, weightedTemperature / max(weightSum, 1.0e-8), weightSum > 1.0e-8);
+  return vec2f(mobileDepth, temperature);
 }
 
 fn rawFaceFlux(x0: i32, z0: i32, x1: i32, z1: i32, axis: u32) -> f32 {
@@ -131,27 +146,58 @@ fn rawFaceFlux(x0: i32, z0: i32, x1: i32, z1: i32, axis: u32) -> f32 {
   // omitted until it can be solved implicitly rather than timestep-clipped.
   let pressureDrive = RHO * GRAVITY * (h0 - h1) / spacing;
   let drive = pressureDrive + RHO * GRAVITY * slope;
-  let hFace = max(0.5 * (h0 + h1), 8.0e-6);
-  let weightedTemperature = (h0 * a.geom.z + h1 * b.geom.z) / max(h0 + h1, 1.0e-8);
-  let sfc = (h0 * meanSolidFat(a) + h1 * meanSolidFat(b)) / max(h0 + h1, 1.0e-8);
-  let liquidViscosity = 0.03 * exp(0.05 * (40.0 - weightedTemperature));
+  let mobileA = mobileLayerState(a);
+  let mobileB = mobileLayerState(b);
+  if (max(mobileA.x, mobileB.x) < 2.0e-7) { return 0.0; }
+  let flowDepth = clamp(0.5 * (mobileA.x + mobileB.x), 0.0, 0.03);
+  let weightedTemperature = clamp(
+    (mobileA.x * mobileA.y + mobileB.x * mobileB.y) / max(mobileA.x + mobileB.x, 1.0e-8),
+    -20.0,
+    100.0
+  );
+  let sfc = solidFatContent(weightedTemperature);
+  let liquidViscosity = clamp(0.03 * exp(0.05 * (40.0 - weightedTemperature)), 0.02, 2.5);
   let normalizedSfc = clamp(sfc / 0.43, 0.0, 1.45);
   let yieldStress = 50000.0 * normalizedSfc * normalizedSfc * normalizedSfc;
-  let bingham = clamp(yieldStress / (hFace * abs(drive) + 1.0e-4), 0.0, 1.0);
+  let bingham = clamp(yieldStress / (max(flowDepth, 8.0e-6) * abs(drive) + 1.0e-4), 0.0, 1.0);
   let yieldedProfile = max(0.0, 1.0 - 1.5 * bingham + 0.5 * bingham * bingham * bingham);
-  let networkFluidity = 1.0 - smoothstep(0.035, 0.22, sfc);
-  let mobility = params.material.w * networkFluidity * networkFluidity
-    * hFace * hFace * hFace / (3.0 * max(liquidViscosity, 0.02));
-  return mobility * yieldedProfile * drive;
+  let mobility = params.material.w * flowDepth * flowDepth * flowDepth / (3.0 * liquidViscosity);
+  let physicalFlux = mobility * yieldedProfile * drive;
+
+  // The raw thin-film coefficient becomes extremely stiff at block depth.
+  // Bound the shared face exchange to a local monotone update instead of
+  // clipping cell heights after the fact (which would destroy mass).
+  let levelingBudget = 0.10 * abs(h0 - h1);
+  let slopeActivation = min(abs(slope) * 4.0, 1.0);
+  let transportBudget = 0.012 * min(h0, h1) * slopeActivation;
+  let maximumFlux = (levelingBudget + transportBudget) * spacing / max(params.timing.x, 1.0e-6);
+  return clamp(physicalFlux, -maximumFlux, maximumFlux);
+}
+
+fn storedFaceFlux(x0: i32, z0: i32, x1: i32, z1: i32, axis: u32) -> f32 {
+  if (!inside(x0, z0) || !inside(x1, z1)) { return 0.0; }
+  let scratchA = flowScratch[cellIndex(x0, z0)].values;
+  return select(scratchA.y, scratchA.x, axis == 0u);
 }
 
 fn limitedFace(x0: i32, z0: i32, x1: i32, z1: i32, axis: u32) -> f32 {
   if (!inside(x0, z0) || !inside(x1, z1)) { return 0.0; }
-  let scratchA = flowScratch[cellIndex(x0, z0)].values;
-  let raw = select(scratchA.y, scratchA.x, axis == 0u);
-  let thetaA = donorScales[cellIndex(x0, z0)];
-  let thetaB = donorScales[cellIndex(x1, z1)];
-  return raw * select(thetaB, thetaA, raw >= 0.0);
+  let raw = storedFaceFlux(x0, z0, x1, z1, axis);
+  let scalesA = donorScales[cellIndex(x0, z0)];
+  let scalesB = donorScales[cellIndex(x1, z1)];
+  let donorA = scalesA.x;
+  let donorB = scalesB.x;
+  let receiverA = scalesA.y;
+  let receiverB = scalesB.y;
+  let donor = select(donorB, donorA, raw >= 0.0);
+  let receiver = select(receiverA, receiverB, raw >= 0.0);
+  return raw * min(donor, receiver);
+}
+
+fn hydraulicHead(x: i32, z: i32) -> f32 {
+  let px = (f32(x) / max(params.grid.x - 1.0, 1.0) - 0.5) * params.timing.y;
+  let pz = (f32(z) / max(params.grid.y - 1.0, 1.0) - 0.5) * params.timing.z;
+  return max(cellHeight(x, z), 0.0) - params.tilt.x * px - params.tilt.y * pz;
 }
 
 fn horizontalHeatFace(x0: i32, z0: i32, x1: i32, z1: i32, layer: u32, axis: u32) -> f32 {
@@ -201,7 +247,7 @@ fn computeRawFaces(@builtin(global_invocation_id) gid: vec3u) {
   if (x >= width() || z >= height()) { return; }
   let qRight = rawFaceFlux(x, z, x + 1, z, 0u);
   let qUp = rawFaceFlux(x, z, x, z + 1, 1u);
-  flowScratch[cellIndex(x, z)].values = vec4f(qRight, qUp, 0.0, 0.0);
+  flowScratch[cellIndex(x, z)].values = vec4f(qRight, qUp, 1.0, 0.0);
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -217,16 +263,49 @@ fn computeDonorScale(@builtin(global_invocation_id) gid: vec3u) {
   let qDown = select(0.0, flowScratch[cellIndex(x, z - 1)].values.y, z > 0);
   let outgoing = max(qRight, 0.0) / params.grid.z + max(-qLeft, 0.0) / params.grid.z
     + max(qUp, 0.0) / params.grid.w + max(-qDown, 0.0) / params.grid.w;
-  let h = max(loadCell(x, z).geom.x, 0.0);
+  // Only thermally mobile layers are available to a donor during this step;
+  // the still-solid crystal network remains coherent instead of being
+  // exported with a neighboring liquid film.
+  let h = mobileLayerState(loadCell(x, z)).x;
   var theta = 1.0;
   if (outgoing > 0.0) {
     if (h > 0.0) {
-      theta = min(1.0, 0.90 * h / max(params.timing.x * outgoing, 1.0e-30));
+      theta = min(1.0, 0.50 * h / max(params.timing.x * outgoing, 1.0e-30));
     } else {
       theta = 0.0;
     }
   }
-  donorScales[index] = theta;
+  donorScales[index] = vec2f(theta, 1.0);
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn computeReceiverScale(@builtin(global_invocation_id) gid: vec3u) {
+  let x = i32(gid.x);
+  let z = i32(gid.y);
+  if (x >= width() || z >= height()) { return; }
+  let index = cellIndex(x, z);
+  let qRight = storedFaceFlux(x, z, x + 1, z, 0u);
+  let qLeft = storedFaceFlux(x - 1, z, x, z, 0u);
+  let qUp = storedFaceFlux(x, z, x, z + 1, 1u);
+  let qDown = storedFaceFlux(x, z - 1, x, z, 1u);
+  let dx = params.grid.z;
+  let dz = params.grid.w;
+  let incoming = max(-qRight, 0.0) / dx + max(qLeft, 0.0) / dx
+    + max(-qUp, 0.0) / dz + max(qDown, 0.0) / dz;
+  let h = max(loadCell(x, z).geom.x, 0.0);
+  let px = (f32(x) / max(params.grid.x - 1.0, 1.0) - 0.5) * params.timing.y;
+  let pz = (f32(z) / max(params.grid.y - 1.0, 1.0) - 0.5) * params.timing.z;
+  let localMaximumHead = max(hydraulicHead(x, z), max(max(hydraulicHead(x - 1, z), hydraulicHead(x + 1, z)),
+    max(hydraulicHead(x, z - 1), hydraulicHead(x, z + 1))));
+  let heightCap = localMaximumHead + params.tilt.x * px + params.tilt.y * pz + 2.0e-5;
+  var receiverTheta = 1.0;
+  if (incoming > 0.0) {
+    let roomRate = 0.90 * max(heightCap - h, 0.0) / max(params.timing.x, 1.0e-6);
+    receiverTheta = clamp(roomRate / incoming, 0.0, 1.0);
+  }
+  var scales = donorScales[index];
+  scales.y = receiverTheta;
+  donorScales[index] = scales;
 }
 
 fn upwindEnthalpy(a: Cell, b: Cell, layer: u32, flux: f32) -> f32 {
@@ -256,9 +335,27 @@ fn simulate(@builtin(global_invocation_id) gid: vec3u) {
   let oldHeight = max(center.geom.x, 0.0);
   let newHeight = oldHeight - dt * ((qRight - qLeft) / dx + (qUp - qDown) / dz);
 
-  var oldTemperatures: array<f32, 8>;
+  var centerMobileWeights: array<f32, 8>;
+  var leftMobileWeights: array<f32, 8>;
+  var rightMobileWeights: array<f32, 8>;
+  var downMobileWeights: array<f32, 8>;
+  var upMobileWeights: array<f32, 8>;
+  var centerMobileSum = 0.0;
+  var leftMobileSum = 0.0;
+  var rightMobileSum = 0.0;
+  var downMobileSum = 0.0;
+  var upMobileSum = 0.0;
   for (var layer = 0u; layer < 8u; layer = layer + 1u) {
-    oldTemperatures[layer] = enthalpyToTemperature(enthalpyAt(center, layer));
+    centerMobileWeights[layer] = mobileLayerWeightAt(center, layer);
+    leftMobileWeights[layer] = mobileLayerWeightAt(left, layer);
+    rightMobileWeights[layer] = mobileLayerWeightAt(right, layer);
+    downMobileWeights[layer] = mobileLayerWeightAt(down, layer);
+    upMobileWeights[layer] = mobileLayerWeightAt(up, layer);
+    centerMobileSum += centerMobileWeights[layer];
+    leftMobileSum += leftMobileWeights[layer];
+    rightMobileSum += rightMobileWeights[layer];
+    downMobileSum += downMobileWeights[layer];
+    upMobileSum += upMobileWeights[layer];
   }
 
   var newArealEnthalpy: array<f32, 8>;
@@ -272,7 +369,16 @@ fn simulate(@builtin(global_invocation_id) gid: vec3u) {
     let leftH = upwindEnthalpy(left, center, layer, qLeft);
     let upH = upwindEnthalpy(center, up, layer, qUp);
     let downH = upwindEnthalpy(down, center, layer, qDown);
-    arealEnthalpy -= dt * ((qRight * rightH - qLeft * leftH) / dx + (qUp * upH - qDown * downH) / dz);
+    let centerFraction = centerMobileWeights[layer] / max(centerMobileSum, 1.0e-8);
+    let rightFraction = rightMobileWeights[layer] / max(rightMobileSum, 1.0e-8);
+    let leftFraction = leftMobileWeights[layer] / max(leftMobileSum, 1.0e-8);
+    let upFraction = upMobileWeights[layer] / max(upMobileSum, 1.0e-8);
+    let downFraction = downMobileWeights[layer] / max(downMobileSum, 1.0e-8);
+    let rightTransport = 8.0 * qRight * rightH * select(rightFraction, centerFraction, qRight >= 0.0);
+    let leftTransport = 8.0 * qLeft * leftH * select(centerFraction, leftFraction, qLeft >= 0.0);
+    let upTransport = 8.0 * qUp * upH * select(upFraction, centerFraction, qUp >= 0.0);
+    let downTransport = 8.0 * qDown * downH * select(centerFraction, downFraction, qDown >= 0.0);
+    arealEnthalpy -= dt * ((rightTransport - leftTransport) / dx + (upTransport - downTransport) / dz);
 
     let heatRight = horizontalHeatFace(x, z, x + 1, z, layer, 0u);
     let heatLeft = horizontalHeatFace(x - 1, z, x, z, layer, 0u);
@@ -390,6 +496,20 @@ fn safeIndex(x: i32, z: i32) -> u32 {
 }
 fn heightAt(x: i32, z: i32) -> f32 { return field[safeIndex(x, z)].geom.x; }
 
+fn reconstructedHeightAt(x: i32, z: i32) -> f32 {
+  let center = max(heightAt(x, z), 0.0) * 4.0;
+  let axial = (max(heightAt(x - 1, z), 0.0) + max(heightAt(x + 1, z), 0.0)
+    + max(heightAt(x, z - 1), 0.0) + max(heightAt(x, z + 1), 0.0)) * 2.0;
+  let diagonal = max(heightAt(x - 1, z - 1), 0.0) + max(heightAt(x + 1, z - 1), 0.0)
+    + max(heightAt(x - 1, z + 1), 0.0) + max(heightAt(x + 1, z + 1), 0.0);
+  return (center + axial + diagonal) * 0.0625;
+}
+
+fn reconstructedHeightNearest(position: vec2f) -> f32 {
+  let coordinate = worldToGrid(position);
+  return reconstructedHeightAt(i32(round(coordinate.x)), i32(round(coordinate.y)));
+}
+
 fn worldToGrid(position: vec2f) -> vec2f {
   return vec2f(
     (position.x / params.timing.y + 0.5) * (params.grid.x - 1.0),
@@ -455,7 +575,7 @@ fn countertopShadow(position: vec3f) -> f32 {
     let samplePosition = position.xz + planarDirection * distance;
     let coordinate = worldToGrid(samplePosition);
     if (coordinate.x < 0.0 || coordinate.y < 0.0 || coordinate.x >= params.grid.x || coordinate.y >= params.grid.y) { continue; }
-    let blocker = sampleCellNearest(samplePosition).geom.x;
+    let blocker = reconstructedHeightNearest(samplePosition);
     let rayHeight = position.y + verticalPerMeter * distance;
     occlusion += smoothstep(-0.0002, 0.0010, blocker - rayHeight - 0.00035);
   }
@@ -533,9 +653,9 @@ fn backgroundFragment(input: FullscreenOut) -> @location(0) vec4f {
     let gridCoordinate = worldToGrid(world.xz);
     let gridX = i32(round(gridCoordinate.x));
     let gridZ = i32(round(gridCoordinate.y));
-    let centerHeight = heightAt(gridX, gridZ);
-    let neighborHeight = max(max(heightAt(gridX - 1, gridZ), heightAt(gridX + 1, gridZ)),
-      max(heightAt(gridX, gridZ - 1), heightAt(gridX, gridZ + 1)));
+    let centerHeight = reconstructedHeightAt(gridX, gridZ);
+    let neighborHeight = max(max(reconstructedHeightAt(gridX - 1, gridZ), reconstructedHeightAt(gridX + 1, gridZ)),
+      max(reconstructedHeightAt(gridX, gridZ - 1), reconstructedHeightAt(gridX, gridZ + 1)));
     let contactRing = (1.0 - smoothstep(0.0, 2.0e-5, centerHeight)) * smoothstep(3.0e-4, 4.0e-3, neighborHeight);
     color *= 1.0 - 0.20 * contactRing;
 
@@ -574,12 +694,15 @@ fn butterVertex(@builtin(vertex_index) vertexIndex: u32) -> ButterVertexOut {
   let cell = field[vertexIndex];
   let worldX = (f32(x) / max(params.grid.x - 1.0, 1.0) - 0.5) * params.timing.y;
   let worldZ = (f32(z) / max(params.grid.y - 1.0, 1.0) - 0.5) * params.timing.z;
-  let derivativeX = (heightAt(x + 1, z) - heightAt(x - 1, z)) / (2.0 * params.grid.z);
-  let derivativeZ = (heightAt(x, z + 1) - heightAt(x, z - 1)) / (2.0 * params.grid.w);
+  let renderHeight = reconstructedHeightAt(x, z);
+  let derivativeX = clamp((reconstructedHeightAt(x + 1, z) - reconstructedHeightAt(x - 1, z))
+    / (2.0 * params.grid.z), -2.5, 2.5);
+  let derivativeZ = clamp((reconstructedHeightAt(x, z + 1) - reconstructedHeightAt(x, z - 1))
+    / (2.0 * params.grid.w), -2.5, 2.5);
   let normal = normalize(vec3f(-derivativeX, 1.0, -derivativeZ));
   let surfaceTemperature = enthalpyToTemperature(cell.thermal1.w);
   let surfaceSfc = solidFatContent(surfaceTemperature);
-  let world = vec3f(worldX, max(cell.geom.x, 0.0) + 0.00004, worldZ);
+  let world = vec3f(worldX, renderHeight + 0.00004, worldZ);
   var output: ButterVertexOut;
   output.position = scene.viewProjection * vec4f(world, 1.0);
   output.worldPosition = world;
@@ -598,7 +721,8 @@ fn butterWallVertex(
   let x = i32(cellInstance % u32(gridWidth()));
   let z = i32(cellInstance / u32(gridWidth()));
   let cell = field[cellInstance];
-  let h = max(cell.geom.x, 0.0);
+  let rawH = max(cell.geom.x, 0.0);
+  let h = reconstructedHeightAt(x, z);
   var neighborX = x;
   var neighborZ = z;
   var outward = vec3f(0.0);
@@ -607,8 +731,11 @@ fn butterWallVertex(
   if (side == 2u) { neighborZ = z - 1; outward = vec3f(0.0, 0.0, -1.0); }
   if (side == 3u) { neighborZ = z + 1; outward = vec3f(0.0, 0.0, 1.0); }
   let neighborInside = neighborX >= 0 && neighborX < gridWidth() && neighborZ >= 0 && neighborZ < gridHeight();
-  let neighborH = select(0.0, heightAt(neighborX, neighborZ), neighborInside);
-  let boundary = h >= 2.0e-5 && h - neighborH > 4.5e-4;
+  let neighborH = select(0.0, max(heightAt(neighborX, neighborZ), 0.0), neighborInside);
+  // A vertical cut face belongs only to a coherent solid block against a
+  // genuinely dry neighbor. Liquid-to-liquid height differences are a
+  // continuous free surface and must never become internal fences.
+  let boundary = rawH >= 8.0e-4 && neighborH < 2.0e-4 && cell.geom.w > 0.12;
 
   var corners = array<vec2f, 6>(
     vec2f(0.0, 0.0), vec2f(1.0, 0.0), vec2f(0.0, 1.0),
@@ -669,7 +796,7 @@ fn selfShadow(position: vec3f) -> f32 {
   for (var step = 1; step <= 12; step = step + 1) {
     let distance = f32(step) * 0.0028;
     let samplePosition = position.xz + planarDirection * distance;
-    let blocker = sampleCellNearest(samplePosition).geom.x;
+    let blocker = reconstructedHeightNearest(samplePosition);
     let rayHeight = position.y + verticalPerMeter * distance;
     occlusion += smoothstep(-0.0002, 0.0010, blocker - rayHeight - 0.00045);
   }
