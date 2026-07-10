@@ -6,6 +6,7 @@ Last reviewed: 2026-07-10.
 
 - [Odyssey-2 Max](https://odyssey.ml/introducing-odyssey-2-max) is a private-beta generative world model trained on several hundred NVIDIA B200 GPUs. It is useful context for learned visual dynamics, but it is not a locally runnable, conservation-authoritative solver for this laptop.
 - [WebGPU specification](https://gpuweb.github.io/gpuweb/) and [WGSL specification](https://www.w3.org/TR/WGSL/) define the compute and render paths used here. Chrome exposes WebGPU on Windows through Direct3D 12.
+- [WebKit features in Safari 26.0](https://webkit.org/blog/17333/webkit-features-in-safari-26-0/#webgpu) documents WebGPU and compute support on iOS. BL-05 still uses a smaller, queue-bounded phone profile because browser support does not make desktop-sized workloads free on a mobile GPU.
 - [Three.js WebGPU documentation](https://threejs.org/docs/pages/WebGPURenderer.html) informed the browser feasibility study, but BL-05 uses the WebGPU API directly to keep the solver and renderer explicit and dependency-free.
 - [NVIDIA Warp](https://nvidia.github.io/warp/) and [Newton](https://newton-physics.github.io/newton/stable/) remain the recommended native reference harnesses for a later 3D validation phase.
 
@@ -39,6 +40,9 @@ These values are calibration starting points. They are not universal constants f
 
 ## Numerical treatment in this release
 
+- The [WGSL floating-point accuracy rules](https://www.w3.org/TR/WGSL/#floating-point-accuracy) permit `tanh` accuracy to inherit from `sinh/cosh`, whose exponential implementation can overflow for unnecessarily large inputs. BL-05 clamps the already-saturated transition argument to ±10 and bounds its implicit thermal brackets before evaluating transcendental math.
+- [TapML](https://jw-liu.xyz/assets/pdf/tapml.pdf) reports a closely matching Metal fast-math `tanh` NaN and a stable-function repair. This is implementation evidence for the portability guard, not a butter calibration source.
+- Apple, [Optimize machine learning for Metal apps](https://developer.apple.com/videos/play/wwdc2025/236/), recommends controlling passes, bandwidth, and resource pressure on Apple GPUs. BL-05 keeps enthalpy in f32, defaults phones to Efficient, caps substeps, and waits on submitted mobile GPU work.
 - Herson et al., [Dripping Thin Films for Real-time Digital Painting](https://eliemichel.github.io/dripping-thin-films/documents/herson26dripping_thin_films.pdf) — the current real-time reference for shared-edge thin-film transport that constrains both donor availability and receiver capacity. BL-05 adapts that idea to a hydraulic-head bound on its regular WebGPU grid.
 - Vantzos et al., [Real-Time Viscous Thin Films](https://mirelabc.github.io/publications/rtvtf.pdf) — mass-preserving, nonnegative GPU thin-film evolution and the longer-term reference for adding a controlled surface-energy solve.
 - Mass uses one signed flux per shared face. A 50% mobile-depth donor bound, a tilt-aware receiver bound, and a local monotone face budget prevent both negative columns and new grid-scale towers without clipping or deleting mass.

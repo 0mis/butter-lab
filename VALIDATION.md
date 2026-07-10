@@ -7,6 +7,8 @@ Validation date: 2026-07-10 on the target HP OMEN laptop.
 - JavaScript syntax checks for `physics-model.js`, `shaders.js`, `webgpu-engine.js`, and `app.js` using Node 24.14.0.
 - Physics-reference and numerical-invariant tests:
   - the enthalpy curve is strictly monotone and its inverse round-trips from −50 to 300 °C;
+  - extreme phase-transition inputs from −1,000,000 to +1,000,000 °C remain finite, while invalid inverse inputs are rejected;
+  - every one of the 12 cell-state lanes rejects injected `NaN` and infinity;
   - the compact GPU inverse stays within its stated interpolation tolerance;
   - all three live grids initialize to 135.00 g and a consistent measured footprint;
   - aggregate donor scaling keeps a four-face adversarial update nonnegative and mass-conservative;
@@ -18,7 +20,7 @@ Validation date: 2026-07-10 on the target HP OMEN laptop.
   - nonlinear contact exchange is monotone and equal-and-opposite from 0.1 µm to 20 mm films;
   - butter plus substrate solar absorption never exceeds incident irradiance;
   - layered transition telemetry does not collapse the eight-layer state to mean temperature.
-- Static interface contracts: 45 unique HTML IDs, keyboard/focus/ARIA hooks, required files, three-pass flow, implicit boundary/contact paths, and local-server hardening are present.
+- Static interface contracts: 46 unique HTML IDs, keyboard/focus/ARIA hooks, required files, four-pass bounded flow, mobile numerical recovery, implicit boundary/contact paths, and local-server hardening are present.
 - Local server checks: GET and HEAD return the correct MIME types; POST returns 405; missing or foreign Host returns 403; malformed NUL paths return 400; encoded traversal returns 404; CSP, `nosniff`, referrer, COOP, and CORP headers are present.
 - Every live WGSL entry point passed semantic validation and HLSL lowering with official Dawn/Tint `v20260423.175430`:
   - `computeRawFaces`
@@ -31,12 +33,14 @@ Validation date: 2026-07-10 on the target HP OMEN laptop.
   - `butterWallVertex`
   - `butterFragment`
 - All nine lowered entry points passed Shader Model 6.0 validation through Chrome 150's `dxcompiler.dll`.
+- The Apple-safe shader path clamps transition `tanh` inputs to ±10, bounds implicit solves to −40…120 °C, classifies non-finite f32 values by IEEE-754 exponent bits, and passed the one-substep startup readback with all wet-cell lanes finite.
 - The complete 1600×900 interface was rendered and visually inspected through the `?ui-preview` QA route after the realism pass. The butter now uses a flat cut-block silhouette, restrained pale material, subtle knife texture, vertical faces, and an anchored contact shadow rather than the earlier playful wedge.
 - The corrected compute and render paths were exercised interactively on the GTX 1660 Ti in Chrome 150 with the Warm pan preset at 60×. At 01:47 simulated time the block showed a smooth basal puddle at 16% transition; at 05:54 it formed a continuous late-stage puddle at 91% transition. Mass remained 100.00%, all pipelines stayed live, and the browser console reported no warnings or errors. The former cell-pillar/vertical-fence failure did not recur.
+- A 393×852 iPhone-shaped run with an iPhone Safari user agent selected Efficient/10× automatically, showed telemetry before controls with zero horizontal overflow, and completed a Warm pan stress run past 60% transition with finite temperature, transition, footprint, and 100.00% mass. The startup health probe and browser console reported no errors. This is a desktop-GPU portability and layout regression; final confirmation on physical Safari remains a real-device acceptance step.
 
 ## Interactive hardware acceptance
 
-Chrome 150 created the D3D12 adapter, all four compute pipelines, all render pipelines, and 4× MSAA Photo pipelines on the target GTX 1660 Ti. Interactive testing reached 44 fps during the accelerated mid-melt inspection; the most computationally expensive 91% liquid state remained responsive while the test harness captured telemetry and a full-frame image.
+Chrome 150 created the D3D12 adapter, all four compute pipelines, all render pipelines, and 4× MSAA Photo pipelines on the target GTX 1660 Ti. Interactive testing reached 44 fps during the accelerated mid-melt inspection; the most computationally expensive 91% liquid state remained responsive while the test harness captured telemetry and a full-frame image. The mobile path additionally fences each submitted compute/render batch before accepting another, so its clock cannot run far ahead of completed GPU work.
 
 ## Modeling limits
 

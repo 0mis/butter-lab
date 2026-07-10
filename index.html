@@ -32,7 +32,7 @@
     <meta name="twitter:image" content="https://0mis.github.io/butter-lab/artifacts/ButterLab-preview.png" />
     <meta name="twitter:image:alt" content="Butter Lab WebGPU simulation showing a butter block with scientific controls and live telemetry." />
     <title>Butter Lab · BL-05</title>
-    <link rel="stylesheet" href="./styles.css?v=0.6.0" />
+    <link rel="stylesheet" href="./styles.css?v=0.7.0" />
   </head>
   <body>
     <main class="app-shell">
@@ -79,6 +79,7 @@
           <button class="preset" type="button" data-preset="cold" aria-pressed="false">Cold stone</button>
           <button class="preset" type="button" data-preset="pan" aria-pressed="false">Warm pan</button>
         </div>
+        <p class="preset-hint">Kitchen softens slowly at room temperature. Use Warm pan for a quick visible melt.</p>
 
         <section class="control-section">
           <label class="range-control" for="ambient-temp">
@@ -148,7 +149,7 @@
           <div class="section-label">
             <span>
               <b>Compute profile</b>
-              <small id="quality-copy" role="status" aria-live="polite">Balanced for GTX 1660 Ti · 6 GB</small>
+              <small id="quality-copy" role="status" aria-live="polite">Choosing a profile for this device</small>
             </span>
           </div>
           <div class="quality-row" role="group" aria-label="Simulation quality">
@@ -204,6 +205,10 @@
         <span class="sim-clock" id="sim-clock">00:00.0</span>
       </div>
 
+      <p id="mobile-gpu-note" class="mobile-gpu-note" role="status">
+        Phone-safe GPU mode is active. If an in-app browser stops updating, open this page in Safari.
+      </p>
+
       <p id="canvas-help" class="canvas-instructions">
         Arrows: orbit <span>·</span> Shift + arrows: heater <span>·</span> +/−: zoom <span>·</span> Space: run/pause
       </p>
@@ -247,6 +252,6 @@
         <button id="retry-button" type="button">Retry initialization</button>
       </div>
     </main>
-    <script type="module" src="./src/app.js?v=0.6.0"></script>
+    <script type="module" src="./src/app.js?v=0.7.0"></script>
   </body>
 </html>

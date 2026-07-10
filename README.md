@@ -10,7 +10,7 @@ BL-05 is a GPU-accelerated butter-melting laboratory tuned and validated on this
 - 16 GB RAM and a 1920×1080 display
 - Chrome 150 or Edge 149
 
-The app deliberately uses WebGPU through Direct3D 12. It does not require Node, Python, Unreal, Unity, CUDA Toolkit, or an internet connection at runtime.
+The app uses standards-based WebGPU: Direct3D 12 on this Windows validation machine and the browser's native Metal backend on current iPhones. It does not require Node, Python, Unreal, Unity, or CUDA Toolkit at runtime.
 
 ## Launch
 
@@ -24,6 +24,12 @@ powershell -ExecutionPolicy Bypass -File .\launch.ps1 -Port 4180
 
 Chrome or Edge hardware acceleration must be enabled. The app asks Windows for the high-performance WebGPU adapter and reports a clear error if the browser does not expose it.
 
+## iPhone and mobile browsers
+
+Current iPhones enter a phone-safe profile automatically: a 160×100 thermodynamic grid, a 10× default time scale, lower render resolution, a bounded number of submitted substeps, and GPU-queue backpressure. Before the interface appears, BL-05 runs and reads back one real compute step; invalid thermal data therefore becomes an explicit startup error instead of visible `NaN` values.
+
+For the most reliable iPhone session, open the shared link in Safari. Embedded social-media browser sheets can use the same WebKit engine but have different lifetime and resource behavior. The Kitchen preset is intentionally slow at 22 °C; use **Warm pan** when you want to see a clear melt within a short test.
+
 ## What the simulation actually does
 
 Each GPU cell stores butter thickness, a live substrate temperature, and eight vertical specific-enthalpy layers. Every adaptive substep computes:
@@ -35,6 +41,8 @@ Each GPU cell stores butter thickness, a live substrate temperature, and eight v
 5. mobile-layer-weighted enthalpy advection instead of moving the still-solid crystal network as liquid;
 6. shared-face horizontal conduction, stable vertical conduction, and implicit equal-and-opposite substrate contact;
 7. implicit convection/radiation and a single butter/substrate sunlight budget.
+
+The phase-transition function clamps its transcendental input after reaching the mathematical asymptote, and both implicit thermal searches stay within the modeled −40 to 120 °C range. This avoids backend-dependent overflow under relaxed mobile GPU math without changing the calibrated butter transition.
 
 When raw flow would outrun the explicit grid, BL-05 reduces the physical timestep and advances the displayed simulation clock only by the time actually solved. The engine badge shows `flow ×…` while that safeguard is active.
 

@@ -77,6 +77,7 @@ h1 em { margin-left: 7px; color: var(--muted); font-size: 11px; font-style: norm
 .preset { min-width: 0; padding: 7px 3px; border: 0; border-radius: 6px; color: var(--dim); background: transparent; font-size: 10px; font-weight: 700; cursor: pointer; white-space: nowrap; }
 .preset:hover { color: var(--muted); }
 .preset.is-active { color: var(--ink); background: rgba(255,255,255,.08); }
+.preset-hint { margin: 7px 18px 12px; color: var(--dim); font-size: 10px; line-height: 1.4; }
 
 .control-section { padding: 14px 18px 15px; border-top: 1px solid rgba(255,255,255,.07); }
 .range-control { display: block; margin: 0 0 13px; }
@@ -135,6 +136,7 @@ input[type="range"]:disabled { opacity: .35; cursor: not-allowed; }
 .transport-controls select { border: 0; color: #d7d3ca; background: transparent; font-size: 10px; }
 .transport-controls option { background: #1a1916; }
 .sim-clock { margin-left: 5px; color: rgba(255,255,255,.55); font-family: "SFMono-Regular", Consolas, monospace; font-size: 10px; font-variant-numeric: tabular-nums; }
+.mobile-gpu-note { display: none; }
 .canvas-instructions { position: absolute; z-index: 5; left: 430px; bottom: 153px; margin: 0; color: #aaa79f; font-size: 10px; letter-spacing: .015em; text-shadow: 0 1px 8px #000; }
 .canvas-instructions span { margin: 0 4px; color: #d3bd70; }
 .science-button { position: absolute; z-index: 5; right: 24px; bottom: 105px; border: 0; background: transparent; color: #a29f96; font-size: 10px; text-decoration: underline; text-decoration-color: rgba(255,255,255,.18); text-underline-offset: 4px; cursor: pointer; }
@@ -195,25 +197,47 @@ body.photo-active .topbar { opacity: .3; }
   .app-shell { width: max(100%, 760px); height: max(100%, 600px); min-width: 760px; min-height: 600px; }
 }
 
-@media (max-width: 820px) {
+@media (max-width: 900px) {
   html, body { width: 100%; height: auto; overflow-x: hidden; overflow-y: auto; }
-  .app-shell { width: 100%; height: auto; min-width: 0; min-height: 100vh; padding-top: 350px; overflow: visible; }
-  #lab-canvas { top: 0; bottom: auto; width: 100%; height: 340px; }
-  .film-grain { inset: 0 0 auto; width: 100%; height: 340px; }
+  .app-shell {
+    --scene-height: 360px;
+    --scene-height: clamp(330px, 42svh, 420px);
+    width: 100%; height: auto; min-width: 0; min-height: 100vh; padding-top: var(--scene-height);
+    padding-bottom: max(18px, env(safe-area-inset-bottom)); overflow: visible;
+    display: flex; flex-direction: column;
+  }
+  #lab-canvas { top: 0; bottom: auto; width: 100%; height: var(--scene-height); touch-action: pan-y; }
+  .film-grain { inset: 0 0 auto; width: 100%; height: var(--scene-height); }
   .topbar { height: auto; min-height: 76px; padding: 14px; flex-wrap: wrap; align-content: flex-start; gap: 10px; }
   .brand-mark { width: 32px; height: 32px; }
   .brand-mark::after { left: 13px; top: 13px; }
   h1 { font-size: 18px; }
   .topbar-actions { width: 100%; max-width: 100%; margin-left: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .segmented, .icon-button { padding: 7px 8px; font-size: 10px; }
-  .control-panel { position: relative; top: auto; right: auto; bottom: auto; width: calc(100% - 20px); max-height: none; margin: 0 10px; }
-  .telemetry { position: relative; left: auto; right: auto; bottom: auto; width: calc(100% - 20px); height: auto; margin: 10px; grid-template-columns: 1fr; overflow: visible; }
-  .metric { min-height: 94px; border-right: 0; border-bottom: 1px solid rgba(255,255,255,.07); }
-  .history-card { display: block; min-height: 104px; }
-  .transport-controls { top: 292px; bottom: auto; left: 10px; right: 10px; gap: 5px; flex-wrap: wrap; }
-  .transport, .transport-controls label { height: 34px; }
+  .control-panel { position: relative; order: 3; top: auto; right: auto; bottom: auto; width: calc(100% - 20px); max-height: none; margin: 0 10px; }
+  .telemetry {
+    position: relative; order: 2; left: auto; right: auto; bottom: auto; width: calc(100% - 20px); height: auto;
+    margin: 0 10px 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: visible;
+  }
+  .metric { min-height: 104px; border-right: 1px solid rgba(255,255,255,.07); border-bottom: 1px solid rgba(255,255,255,.07); }
+  .metric:nth-child(even) { border-right: 0; }
+  .history-card { display: block; min-height: 104px; grid-column: 1 / -1; }
+  .transport-controls {
+    position: relative; order: 0; top: auto; bottom: auto; left: auto; right: auto; width: calc(100% - 20px);
+    margin: 8px 10px; display: grid; grid-template-columns: .8fr 1fr 1.55fr; gap: 6px;
+  }
+  .transport, .transport-controls label { min-width: 0; width: 100%; height: 44px; justify-content: center; }
+  .transport-controls label { padding: 0 10px; }
+  .transport-controls select { min-width: 0; font-size: 16px; }
+  .sim-clock { grid-column: 1 / -1; margin: -1px 3px 0; justify-self: end; }
+  body.mobile-safe .mobile-gpu-note {
+    display: block; order: 1; margin: 0 10px 10px; padding: 10px 12px; border: 1px solid rgba(225,199,111,.20);
+    border-radius: 10px; color: #bdb7a5; background: rgba(225,199,111,.055); font-size: 10px; line-height: 1.45;
+  }
+  input[type="range"]::-webkit-slider-thumb { width: 24px; height: 24px; }
+  .quality, .preset, .material { min-height: 44px; }
   .canvas-instructions { width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-  .science-button { position: relative; right: auto; bottom: auto; display: block; margin: 2px 14px 22px auto; }
+  .science-button { position: relative; order: 4; right: auto; bottom: auto; display: block; margin: 2px 14px 22px auto; }
   .error-panel { position: fixed; padding: 16vh 24px; }
   .boot-overlay { position: fixed; }
 }
