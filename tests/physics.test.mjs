@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   BUTTER,
   DOMAIN,
+  FLOW_STABILITY,
   MATERIALS,
   airflowHeatCoefficient,
   buildInitialState,
@@ -12,10 +13,14 @@ import {
   enthalpyToTemperatureFast,
   layeredStateAverages,
   limitedFaceFlux,
+  mobileLayerState,
+  mobileLayerWeights,
   radiativeHeatFlux,
+  receiverScale,
   solarEnergyPartition,
   solveContactEnergy,
   solidFatContent,
+  stabilityLimitedFaceFlux,
   temperatureToEnthalpy,
   transitionFraction,
   yieldStress,
@@ -45,6 +50,34 @@ assert.ok(transitionFraction(40) > 0.99, "warm butter should consume almost all 
 assert.ok(solidFatContent(10) > solidFatContent(20));
 assert.ok(solidFatContent(20) > solidFatContent(30));
 assert.ok(yieldStress(10) > yieldStress(30) * 100, "crystal network should dominate cold rheology");
+
+{
+  const height = 0.019;
+  const cold = mobileLayerState(height, Array(8).fill(7));
+  const basalMelt = mobileLayerState(height, [40, ...Array(7).fill(7)]);
+  const halfMelt = mobileLayerState(height, [...Array(4).fill(40), ...Array(4).fill(7)]);
+  const liquid = mobileLayerState(height, Array(8).fill(40));
+  assert.equal(cold.depth, 0, "a cold crystal network must not become a mobile full-height film");
+  assert.ok(basalMelt.depth > height * 0.12 && basalMelt.depth < height * 0.13);
+  assert.ok(halfMelt.depth > height * 0.49 && halfMelt.depth < height * 0.51);
+  assert.ok(liquid.depth > height * 0.999);
+
+  const temperatures = [40, 35, 30, 25, 20, 15, 10, 7];
+  const weights = mobileLayerWeights(temperatures);
+  assert.ok(Math.abs(weights.reduce((sum, weight) => sum + weight, 0) - 1) < 1e-12);
+  const q = 3.2e-5;
+  const enthalpies = temperatures.map(temperatureToEnthalpy);
+  const physicalLayerEnergyFlux = weights.reduce(
+    (sum, weight, layer) => sum + (8 * q * weight * enthalpies[layer]) / DOMAIN.layers,
+    0,
+  );
+  const expectedMobileEnergyFlux = q * weights.reduce(
+    (sum, weight, layer) => sum + weight * enthalpies[layer],
+    0,
+  );
+  assert.ok(Math.abs(physicalLayerEnergyFlux - expectedMobileEnergyFlux) < 1e-12,
+    "mobile-layer enthalpy advection must conserve its weighted face energy");
+}
 
 assert.ok(radiativeHeatFlux(10, 30) > 0);
 assert.ok(radiativeHeatFlux(40, 20) < 0);
@@ -159,6 +192,34 @@ assert.ok(Math.abs(layered.transition - transitionFraction(15)) > 0.1, "telemetr
   assert.ok(updated.every((value) => value >= -1e-12), "aggregate donor scaling must preserve nonnegative height");
   assert.ok(Math.abs(updated.reduce((sum, value) => sum + value, 0) - values.reduce((sum, value) => sum + value, 0)) < 1e-12,
     "shared limited faces must conserve total height");
+}
+
+{
+  const spacing = DOMAIN.width / 255;
+  const dt = 0.04;
+  const high = 0.019;
+  const low = 0;
+  const rawFlux = 1.0;
+  const flux = stabilityLimitedFaceFlux(rawFlux, high, low, spacing, dt);
+  const transferredHeight = dt * flux / spacing;
+  assert.ok(Math.abs(transferredHeight - FLOW_STABILITY.levelingFraction * (high - low)) < 1e-12);
+  assert.ok(high - transferredHeight > low + transferredHeight,
+    "one face update must not reverse a liquid height jump");
+
+  const isolatedPeakAfter = high - 4 * transferredHeight;
+  assert.ok(isolatedPeakAfter >= transferredHeight,
+    "four bounded faces must not turn an isolated peak into a checkerboard trough");
+  assert.ok(Math.abs(isolatedPeakAfter + 4 * transferredHeight - high) < 1e-12,
+    "face stability limiting must remain conservative");
+  assert.equal(stabilityLimitedFaceFlux(Infinity, high, low, spacing, dt), 0);
+
+  const depressed = 0.001;
+  const localMaximum = 0.019;
+  const incomingRate = 4;
+  const receive = receiverScale(depressed, localMaximum, dt, incomingRate);
+  const receivedHeight = depressed + dt * incomingRate * receive;
+  assert.ok(receivedHeight <= localMaximum + FLOW_STABILITY.receiverEpsilon + 1e-12,
+    "receiver scaling must prevent several donors from creating a new maximum");
 }
 
 assert.equal(BUTTER.latentWeights.length, 3);

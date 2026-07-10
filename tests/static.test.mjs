@@ -57,9 +57,15 @@ assert.match(shaders, /yieldedProfile/);
 assert.match(shaders, /radiationFlux/);
 assert.match(shaders, /fn computeRawFaces/);
 assert.match(shaders, /fn computeDonorScale/);
+assert.match(shaders, /fn computeReceiverScale/);
 assert.match(shaders, /fn horizontalHeatFace/);
 assert.match(shaders, /fn contactTemperatureResidual/);
+assert.match(shaders, /fn mobileLayerState/);
+assert.match(shaders, /8\.0 \* qRight \* rightH/);
+assert.match(shaders, /fn reconstructedHeightAt/);
 assert.match(shaders, /fn butterWallVertex/);
+assert.match(shaders, /cell\.geom\.w > 0\.12/);
+assert.doesNotMatch(shaders, /h - neighborH > 4\.5e-4/);
 assert.doesNotMatch(shaders, /SURFACE_TENSION/);
 assert.doesNotMatch(shaders, /newHeight = clamp/);
 
