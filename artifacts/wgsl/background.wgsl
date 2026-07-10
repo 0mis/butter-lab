@@ -7,6 +7,8 @@ const GRAVITY: f32 = 9.80665;
 const BUTTER_K: f32 = 0.24;
 const CP: f32 = 2050.0;
 const SIGMA: f32 = 5.6703744e-8;
+const THERMAL_MIN_C: f32 = -40.0;
+const THERMAL_MAX_C: f32 = 120.0;
 
 struct Cell {
   geom: vec4f,       // height, substrate temperature, mean butter temperature, mean solid-fat content
@@ -26,8 +28,23 @@ struct Params {
 
 fn saturate(value: f32) -> f32 { return clamp(value, 0.0, 1.0); }
 
+fn finiteOr(value: f32, fallback: f32) -> f32 {
+  // WGSL intentionally has no isNaN/isInf built-ins. IEEE-754 exponent bits
+  // classify both infinities and NaNs without invoking more floating math.
+  let bits = bitcast<u32>(value);
+  let nonFinite = (bits & 0x7f800000u) == 0x7f800000u;
+  return select(value, fallback, nonFinite);
+}
+
+fn finiteClamp(value: f32, low: f32, high: f32, fallback: f32) -> f32 {
+  return clamp(finiteOr(value, fallback), low, high);
+}
+
 fn transition(t: f32, peak: f32, width: f32) -> f32 {
-  return 0.5 * (1.0 + tanh((t - peak) / width));
+  // Some mobile shader backends lower large tanh inputs through exponentials.
+  // The phase curve is already at its asymptote by |x| = 10, so clamping here
+  // prevents Inf/Inf without changing the modeled transition.
+  return 0.5 * (1.0 + tanh(clamp((t - peak) / width, -10.0, 10.0)));
 }
 
 fn temperatureToEnthalpy(t: f32) -> f32 {
@@ -40,23 +57,24 @@ fn temperatureToEnthalpy(t: f32) -> f32 {
 fn enthalpyToTemperature(value: f32) -> f32 {
   // Compact monotone inverse LUT. Dense knots surround each DSC transition;
   // linear lookup avoids hundreds of transcendental evaluations per column.
-  if (value < 0.0) { return value / CP; }
-  if (value < 10250.044) { return mix(0.0, 5.0, value / 10250.044); }
-  if (value < 16402.385) { return mix(5.0, 8.0, (value - 10250.044) / 6152.341); }
-  if (value < 20534.213) { return mix(8.0, 10.0, (value - 16402.385) / 4131.828); }
-  if (value < 25070.503) { return mix(10.0, 12.0, (value - 20534.213) / 4536.290); }
-  if (value < 32835.731) { return mix(12.0, 14.0, (value - 25070.503) / 7765.228); }
-  if (value < 42219.588) { return mix(14.0, 16.0, (value - 32835.731) / 9383.857); }
-  if (value < 51447.200) { return mix(16.0, 18.0, (value - 42219.588) / 9227.612); }
-  if (value < 62037.212) { return mix(18.0, 20.0, (value - 51447.200) / 10590.012); }
-  if (value < 67284.751) { return mix(20.0, 22.0, (value - 62037.212) / 5247.539); }
-  if (value < 73577.140) { return mix(22.0, 25.0, (value - 67284.751) / 6292.389); }
-  if (value < 80672.674) { return mix(25.0, 28.0, (value - 73577.140) / 7095.534); }
-  if (value < 89435.903) { return mix(28.0, 30.0, (value - 80672.674) / 8763.229); }
-  if (value < 103330.747) { return mix(30.0, 32.0, (value - 89435.903) / 13894.844); }
-  if (value < 114838.002) { return mix(32.0, 35.0, (value - 103330.747) / 11507.255); }
-  if (value < 125470.358) { return mix(35.0, 40.0, (value - 114838.002) / 10632.356); }
-  return (value - 43473.0) / CP;
+  let safeValue = finiteOr(value, temperatureToEnthalpy(7.0));
+  if (safeValue < 0.0) { return safeValue / CP; }
+  if (safeValue < 10250.044) { return mix(0.0, 5.0, safeValue / 10250.044); }
+  if (safeValue < 16402.385) { return mix(5.0, 8.0, (safeValue - 10250.044) / 6152.341); }
+  if (safeValue < 20534.213) { return mix(8.0, 10.0, (safeValue - 16402.385) / 4131.828); }
+  if (safeValue < 25070.503) { return mix(10.0, 12.0, (safeValue - 20534.213) / 4536.290); }
+  if (safeValue < 32835.731) { return mix(12.0, 14.0, (safeValue - 25070.503) / 7765.228); }
+  if (safeValue < 42219.588) { return mix(14.0, 16.0, (safeValue - 32835.731) / 9383.857); }
+  if (safeValue < 51447.200) { return mix(16.0, 18.0, (safeValue - 42219.588) / 9227.612); }
+  if (safeValue < 62037.212) { return mix(18.0, 20.0, (safeValue - 51447.200) / 10590.012); }
+  if (safeValue < 67284.751) { return mix(20.0, 22.0, (safeValue - 62037.212) / 5247.539); }
+  if (safeValue < 73577.140) { return mix(22.0, 25.0, (safeValue - 67284.751) / 6292.389); }
+  if (safeValue < 80672.674) { return mix(25.0, 28.0, (safeValue - 73577.140) / 7095.534); }
+  if (safeValue < 89435.903) { return mix(28.0, 30.0, (safeValue - 80672.674) / 8763.229); }
+  if (safeValue < 103330.747) { return mix(30.0, 32.0, (safeValue - 89435.903) / 13894.844); }
+  if (safeValue < 114838.002) { return mix(32.0, 35.0, (safeValue - 103330.747) / 11507.255); }
+  if (safeValue < 125470.358) { return mix(35.0, 40.0, (safeValue - 114838.002) / 10632.356); }
+  return (safeValue - 43473.0) / CP;
 }
 
 fn smoothMix(a: f32, b: f32, amount: f32) -> f32 {
@@ -81,6 +99,32 @@ fn enthalpyAt(cell: Cell, layer: u32) -> f32 {
   return cell.thermal1[layer - 4u];
 }
 
+fn sanitizeCell(cell: Cell) -> Cell {
+  let fallbackEnthalpy = temperatureToEnthalpy(7.0);
+  let lowEnthalpy = temperatureToEnthalpy(THERMAL_MIN_C);
+  let highEnthalpy = temperatureToEnthalpy(THERMAL_MAX_C);
+  var safe: Cell;
+  safe.geom = vec4f(
+    max(finiteOr(cell.geom.x, 0.0), 0.0),
+    finiteClamp(cell.geom.y, THERMAL_MIN_C, THERMAL_MAX_C, 22.0),
+    finiteClamp(cell.geom.z, THERMAL_MIN_C, THERMAL_MAX_C, 7.0),
+    finiteClamp(cell.geom.w, 0.0, 0.62, solidFatContent(7.0))
+  );
+  safe.thermal0 = vec4f(
+    finiteClamp(cell.thermal0.x, lowEnthalpy, highEnthalpy, fallbackEnthalpy),
+    finiteClamp(cell.thermal0.y, lowEnthalpy, highEnthalpy, fallbackEnthalpy),
+    finiteClamp(cell.thermal0.z, lowEnthalpy, highEnthalpy, fallbackEnthalpy),
+    finiteClamp(cell.thermal0.w, lowEnthalpy, highEnthalpy, fallbackEnthalpy)
+  );
+  safe.thermal1 = vec4f(
+    finiteClamp(cell.thermal1.x, lowEnthalpy, highEnthalpy, fallbackEnthalpy),
+    finiteClamp(cell.thermal1.y, lowEnthalpy, highEnthalpy, fallbackEnthalpy),
+    finiteClamp(cell.thermal1.z, lowEnthalpy, highEnthalpy, fallbackEnthalpy),
+    finiteClamp(cell.thermal1.w, lowEnthalpy, highEnthalpy, fallbackEnthalpy)
+  );
+  return safe;
+}
+
 
 struct Scene {
   viewProjection: mat4x4f,
@@ -100,7 +144,9 @@ fn gridHeight() -> i32 { return i32(params.grid.y); }
 fn safeIndex(x: i32, z: i32) -> u32 {
   return u32(clamp(z, 0, gridHeight() - 1) * gridWidth() + clamp(x, 0, gridWidth() - 1));
 }
-fn heightAt(x: i32, z: i32) -> f32 { return field[safeIndex(x, z)].geom.x; }
+fn heightAt(x: i32, z: i32) -> f32 {
+  return max(finiteOr(field[safeIndex(x, z)].geom.x, 0.0), 0.0);
+}
 
 fn reconstructedHeightAt(x: i32, z: i32) -> f32 {
   let center = max(heightAt(x, z), 0.0) * 4.0;
@@ -125,7 +171,7 @@ fn worldToGrid(position: vec2f) -> vec2f {
 
 fn sampleCellNearest(position: vec2f) -> Cell {
   let coordinate = worldToGrid(position);
-  return field[safeIndex(i32(round(coordinate.x)), i32(round(coordinate.y)))];
+  return sanitizeCell(field[safeIndex(i32(round(coordinate.x)), i32(round(coordinate.y)))]);
 }
 
 fn hash21(p: vec2f) -> f32 {
