@@ -102,6 +102,20 @@ fn safeIndex(x: i32, z: i32) -> u32 {
 }
 fn heightAt(x: i32, z: i32) -> f32 { return field[safeIndex(x, z)].geom.x; }
 
+fn reconstructedHeightAt(x: i32, z: i32) -> f32 {
+  let center = max(heightAt(x, z), 0.0) * 4.0;
+  let axial = (max(heightAt(x - 1, z), 0.0) + max(heightAt(x + 1, z), 0.0)
+    + max(heightAt(x, z - 1), 0.0) + max(heightAt(x, z + 1), 0.0)) * 2.0;
+  let diagonal = max(heightAt(x - 1, z - 1), 0.0) + max(heightAt(x + 1, z - 1), 0.0)
+    + max(heightAt(x - 1, z + 1), 0.0) + max(heightAt(x + 1, z + 1), 0.0);
+  return (center + axial + diagonal) * 0.0625;
+}
+
+fn reconstructedHeightNearest(position: vec2f) -> f32 {
+  let coordinate = worldToGrid(position);
+  return reconstructedHeightAt(i32(round(coordinate.x)), i32(round(coordinate.y)));
+}
+
 fn worldToGrid(position: vec2f) -> vec2f {
   return vec2f(
     (position.x / params.timing.y + 0.5) * (params.grid.x - 1.0),
@@ -167,7 +181,7 @@ fn countertopShadow(position: vec3f) -> f32 {
     let samplePosition = position.xz + planarDirection * distance;
     let coordinate = worldToGrid(samplePosition);
     if (coordinate.x < 0.0 || coordinate.y < 0.0 || coordinate.x >= params.grid.x || coordinate.y >= params.grid.y) { continue; }
-    let blocker = sampleCellNearest(samplePosition).geom.x;
+    let blocker = reconstructedHeightNearest(samplePosition);
     let rayHeight = position.y + verticalPerMeter * distance;
     occlusion += smoothstep(-0.0002, 0.0010, blocker - rayHeight - 0.00035);
   }
@@ -242,9 +256,9 @@ fn backgroundFragment(input: FullscreenOut) -> @location(0) vec4f {
     let gridCoordinate = worldToGrid(world.xz);
     let gridX = i32(round(gridCoordinate.x));
     let gridZ = i32(round(gridCoordinate.y));
-    let centerHeight = heightAt(gridX, gridZ);
-    let neighborHeight = max(max(heightAt(gridX - 1, gridZ), heightAt(gridX + 1, gridZ)),
-      max(heightAt(gridX, gridZ - 1), heightAt(gridX, gridZ + 1)));
+    let centerHeight = reconstructedHeightAt(gridX, gridZ);
+    let neighborHeight = max(max(reconstructedHeightAt(gridX - 1, gridZ), reconstructedHeightAt(gridX + 1, gridZ)),
+      max(reconstructedHeightAt(gridX, gridZ - 1), reconstructedHeightAt(gridX, gridZ + 1)));
     let contactRing = (1.0 - smoothstep(0.0, 2.0e-5, centerHeight)) * smoothstep(3.0e-4, 4.0e-3, neighborHeight);
     color *= 1.0 - 0.20 * contactRing;
 

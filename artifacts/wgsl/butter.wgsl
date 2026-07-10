@@ -102,6 +102,20 @@ fn safeIndex(x: i32, z: i32) -> u32 {
 }
 fn heightAt(x: i32, z: i32) -> f32 { return field[safeIndex(x, z)].geom.x; }
 
+fn reconstructedHeightAt(x: i32, z: i32) -> f32 {
+  let center = max(heightAt(x, z), 0.0) * 4.0;
+  let axial = (max(heightAt(x - 1, z), 0.0) + max(heightAt(x + 1, z), 0.0)
+    + max(heightAt(x, z - 1), 0.0) + max(heightAt(x, z + 1), 0.0)) * 2.0;
+  let diagonal = max(heightAt(x - 1, z - 1), 0.0) + max(heightAt(x + 1, z - 1), 0.0)
+    + max(heightAt(x - 1, z + 1), 0.0) + max(heightAt(x + 1, z + 1), 0.0);
+  return (center + axial + diagonal) * 0.0625;
+}
+
+fn reconstructedHeightNearest(position: vec2f) -> f32 {
+  let coordinate = worldToGrid(position);
+  return reconstructedHeightAt(i32(round(coordinate.x)), i32(round(coordinate.y)));
+}
+
 fn worldToGrid(position: vec2f) -> vec2f {
   return vec2f(
     (position.x / params.timing.y + 0.5) * (params.grid.x - 1.0),
@@ -167,7 +181,7 @@ fn countertopShadow(position: vec3f) -> f32 {
     let samplePosition = position.xz + planarDirection * distance;
     let coordinate = worldToGrid(samplePosition);
     if (coordinate.x < 0.0 || coordinate.y < 0.0 || coordinate.x >= params.grid.x || coordinate.y >= params.grid.y) { continue; }
-    let blocker = sampleCellNearest(samplePosition).geom.x;
+    let blocker = reconstructedHeightNearest(samplePosition);
     let rayHeight = position.y + verticalPerMeter * distance;
     occlusion += smoothstep(-0.0002, 0.0010, blocker - rayHeight - 0.00035);
   }
@@ -189,12 +203,15 @@ fn butterVertex(@builtin(vertex_index) vertexIndex: u32) -> ButterVertexOut {
   let cell = field[vertexIndex];
   let worldX = (f32(x) / max(params.grid.x - 1.0, 1.0) - 0.5) * params.timing.y;
   let worldZ = (f32(z) / max(params.grid.y - 1.0, 1.0) - 0.5) * params.timing.z;
-  let derivativeX = (heightAt(x + 1, z) - heightAt(x - 1, z)) / (2.0 * params.grid.z);
-  let derivativeZ = (heightAt(x, z + 1) - heightAt(x, z - 1)) / (2.0 * params.grid.w);
+  let renderHeight = reconstructedHeightAt(x, z);
+  let derivativeX = clamp((reconstructedHeightAt(x + 1, z) - reconstructedHeightAt(x - 1, z))
+    / (2.0 * params.grid.z), -2.5, 2.5);
+  let derivativeZ = clamp((reconstructedHeightAt(x, z + 1) - reconstructedHeightAt(x, z - 1))
+    / (2.0 * params.grid.w), -2.5, 2.5);
   let normal = normalize(vec3f(-derivativeX, 1.0, -derivativeZ));
   let surfaceTemperature = enthalpyToTemperature(cell.thermal1.w);
   let surfaceSfc = solidFatContent(surfaceTemperature);
-  let world = vec3f(worldX, max(cell.geom.x, 0.0) + 0.00004, worldZ);
+  let world = vec3f(worldX, renderHeight + 0.00004, worldZ);
   var output: ButterVertexOut;
   output.position = scene.viewProjection * vec4f(world, 1.0);
   output.worldPosition = world;
@@ -213,7 +230,8 @@ fn butterWallVertex(
   let x = i32(cellInstance % u32(gridWidth()));
   let z = i32(cellInstance / u32(gridWidth()));
   let cell = field[cellInstance];
-  let h = max(cell.geom.x, 0.0);
+  let rawH = max(cell.geom.x, 0.0);
+  let h = reconstructedHeightAt(x, z);
   var neighborX = x;
   var neighborZ = z;
   var outward = vec3f(0.0);
@@ -222,8 +240,11 @@ fn butterWallVertex(
   if (side == 2u) { neighborZ = z - 1; outward = vec3f(0.0, 0.0, -1.0); }
   if (side == 3u) { neighborZ = z + 1; outward = vec3f(0.0, 0.0, 1.0); }
   let neighborInside = neighborX >= 0 && neighborX < gridWidth() && neighborZ >= 0 && neighborZ < gridHeight();
-  let neighborH = select(0.0, heightAt(neighborX, neighborZ), neighborInside);
-  let boundary = h >= 2.0e-5 && h - neighborH > 4.5e-4;
+  let neighborH = select(0.0, max(heightAt(neighborX, neighborZ), 0.0), neighborInside);
+  // A vertical cut face belongs only to a coherent solid block against a
+  // genuinely dry neighbor. Liquid-to-liquid height differences are a
+  // continuous free surface and must never become internal fences.
+  let boundary = rawH >= 8.0e-4 && neighborH < 2.0e-4 && cell.geom.w > 0.12;
 
   var corners = array<vec2f, 6>(
     vec2f(0.0, 0.0), vec2f(1.0, 0.0), vec2f(0.0, 1.0),
@@ -284,7 +305,7 @@ fn selfShadow(position: vec3f) -> f32 {
   for (var step = 1; step <= 12; step = step + 1) {
     let distance = f32(step) * 0.0028;
     let samplePosition = position.xz + planarDirection * distance;
-    let blocker = sampleCellNearest(samplePosition).geom.x;
+    let blocker = reconstructedHeightNearest(samplePosition);
     let rayHeight = position.y + verticalPerMeter * distance;
     occlusion += smoothstep(-0.0002, 0.0010, blocker - rayHeight - 0.00045);
   }
