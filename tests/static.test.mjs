@@ -20,6 +20,7 @@ for (const file of [
   "src/webgpu-engine.js",
   "src/physics-model.js",
   "src/shaders.js",
+  "tests/export-shaders.mjs",
   "launch.ps1",
   "Launch Butter Lab.cmd",
   "README.md",
@@ -46,6 +47,9 @@ assert.match(engine, /requestAdapter\(\{ powerPreference: "high-performance" \}\
 assert.match(engine, /dispatchWorkgroups/);
 assert.match(engine, /GPUMapMode\.READ/);
 assert.match(engine, /flowStepScale/);
+assert.match(engine, /shouldUseMobileSafeMode/);
+assert.match(engine, /mobileQueuePending/);
+assert.match(engine, /maximumSubsteps = this\.mobileSafeMode \? 4 : 24/);
 assert.match(engine, /binding: 3/);
 assert.match(engine, /wallPipeline/);
 assert.match(engine, /multisample: \{ count: 4 \}/);
@@ -61,6 +65,11 @@ assert.match(shaders, /fn computeReceiverScale/);
 assert.match(shaders, /fn horizontalHeatFace/);
 assert.match(shaders, /fn contactTemperatureResidual/);
 assert.match(shaders, /fn mobileLayerState/);
+assert.match(shaders, /tanh\(clamp\(/);
+assert.match(shaders, /bitcast<u32>\(value\)/);
+assert.match(shaders, /fn sanitizeCell/);
+assert.match(shaders, /THERMAL_MIN_C/);
+assert.doesNotMatch(shaders, /\bisNan\s*\(|\bisInf\s*\(/);
 assert.match(shaders, /8\.0 \* qRight \* rightH/);
 assert.match(shaders, /fn reconstructedHeightAt/);
 assert.match(shaders, /fn butterWallVertex/);
@@ -79,5 +88,14 @@ const styles = await readFile(resolve(root, "styles.css"), "utf8");
 assert.match(styles, /:focus-visible/);
 assert.match(styles, /prefers-reduced-motion/);
 assert.match(styles, /max-height: 599px/);
+assert.match(styles, /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
+assert.match(styles, /body\.mobile-safe \.mobile-gpu-note/);
+
+const app = await readFile(resolve(root, "src", "app.js"), "utf8");
+assert.match(app, /cellStateIsFinite/);
+assert.match(app, /Checking thermal solver health/);
+assert.match(app, /recoverNumericalState/);
+assert.doesNotMatch(app, /GTX 1660 Ti/);
+assert.match(html, /app\.js\?v=0\.7\.0/);
 
 console.log(`Static contract checks passed for ${ids.length} unique interface ids.`);

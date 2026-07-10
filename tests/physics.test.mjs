@@ -6,6 +6,7 @@ import {
   MATERIALS,
   airflowHeatCoefficient,
   buildInitialState,
+  cellStateIsFinite,
   computeMass,
   conservativeHorizontalHeatFace,
   donorScale,
@@ -30,6 +31,12 @@ for (let temperature = -10; temperature <= 80; temperature += 0.5) {
   const recovered = enthalpyToTemperature(temperatureToEnthalpy(temperature));
   assert.ok(Math.abs(recovered - temperature) < 1e-5, `enthalpy inversion failed at ${temperature} C`);
 }
+for (const temperature of [-1e6, -500, -40, 120, 700, 1e6]) {
+  assert.ok(Number.isFinite(temperatureToEnthalpy(temperature)), `extreme transition input must remain finite at ${temperature} C`);
+}
+assert.ok(Number.isNaN(enthalpyToTemperature(NaN)));
+assert.ok(Number.isNaN(enthalpyToTemperatureFast(Infinity)));
+assert.ok(Number.isNaN(solidFatContent(NaN)));
 
 let maximumFastInverseError = 0;
 for (let temperature = -50; temperature <= 300; temperature += 0.1) {
@@ -95,9 +102,20 @@ const mass = computeMass(initial.data, 128, 80, DOMAIN.width / 127, DOMAIN.depth
 assert.ok(Math.abs(mass - initial.modeledMass) < 1e-8);
 assert.ok(mass > 0.05 && mass < 0.20, `modeled butter mass should be plausible, got ${mass} kg`);
 assert.ok(initial.initialFootprint > 0.006 && initial.initialFootprint < 0.009);
+const firstWetOffset = initial.data.findIndex((value, index) => index % 12 === 0 && value > 2e-5);
+const firstWetCell = initial.data.slice(firstWetOffset, firstWetOffset + 12);
+assert.equal(cellStateIsFinite(firstWetCell), true);
+for (let channel = 0; channel < 12; channel += 1) {
+  const withNaN = firstWetCell.slice();
+  withNaN[channel] = NaN;
+  assert.equal(cellStateIsFinite(withNaN), false, `NaN state lane ${channel} must be rejected`);
+  const withInfinity = firstWetCell.slice();
+  withInfinity[channel] = Infinity;
+  assert.equal(cellStateIsFinite(withInfinity), false, `infinite state lane ${channel} must be rejected`);
+}
 
 const liveMasses = [];
-for (const [width, height] of [[192, 120], [256, 160], [320, 200]]) {
+for (const [width, height] of [[160, 100], [256, 160], [320, 200]]) {
   const state = buildInitialState(width, height, 7, 22);
   liveMasses.push(state.modeledMass);
   assert.ok(state.initialFootprint > 0.006 && state.initialFootprint < 0.009);

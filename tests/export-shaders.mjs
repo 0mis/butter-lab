@@ -2,11 +2,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { backgroundShader, butterShader, computeShader } from "../src/shaders.js";
 
-const directory = resolve("artifacts", "wgsl");
-await mkdir(directory, { recursive: true });
+const output = resolve(import.meta.dirname, "..", "artifacts", "wgsl");
+await mkdir(output, { recursive: true });
 await Promise.all([
-  writeFile(resolve(directory, "compute.wgsl"), computeShader, "utf8"),
-  writeFile(resolve(directory, "background.wgsl"), backgroundShader, "utf8"),
-  writeFile(resolve(directory, "butter.wgsl"), butterShader, "utf8"),
+  writeFile(resolve(output, "background.wgsl"), backgroundShader),
+  writeFile(resolve(output, "butter.wgsl"), butterShader),
+  writeFile(resolve(output, "compute.wgsl"), computeShader),
 ]);
-console.log(`Exported WGSL validation artifacts to ${directory}`);
+
+console.log("Exported validated WGSL snapshots.");

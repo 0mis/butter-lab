@@ -4,8 +4,14 @@ import {
   mat4LookAt,
   mat4Multiply,
   mat4PerspectiveZO,
+  shouldUseMobileSafeMode,
   transformPoint,
 } from "../src/webgpu-engine.js";
+
+assert.equal(shouldUseMobileSafeMode({ userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0)", maxTouchPoints: 5 }, 393), true);
+assert.equal(shouldUseMobileSafeMode({ userAgent: "Mozilla/5.0 (Macintosh)", platform: "MacIntel", maxTouchPoints: 5 }, 1024), true);
+assert.equal(shouldUseMobileSafeMode({ userAgent: "Mozilla/5.0 (Linux; Android 16; Mobile)", maxTouchPoints: 5 }, 412), true);
+assert.equal(shouldUseMobileSafeMode({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", platform: "Win32", maxTouchPoints: 0 }, 1440), false);
 
 const eye = [0.15, 0.13, 0.26];
 const target = [0, 0.006, 0];
