@@ -4,8 +4,8 @@ import {
   QUALITY_PROFILES,
   buildInitialState,
   temperatureToEnthalpy,
-} from "./physics-model.js?v=0.6.0";
-import { backgroundShader, butterShader, computeShader } from "./shaders.js?v=0.6.0";
+} from "./physics-model.js?v=0.7.0";
+import { backgroundShader, butterShader, computeShader } from "./shaders.js?v=0.7.0";
 
 const STATE_STRIDE_FLOATS = 12;
 const STATE_STRIDE_BYTES = STATE_STRIDE_FLOATS * 4;
@@ -17,6 +17,15 @@ const SCENE_BYTES = 12 * 16;
 
 const GPU_BUFFER = globalThis.GPUBufferUsage;
 const GPU_SHADER = globalThis.GPUShaderStage;
+
+export function shouldUseMobileSafeMode(navigatorLike = globalThis.navigator, viewportWidth = globalThis.innerWidth) {
+  const userAgent = navigatorLike?.userAgent || "";
+  const platform = navigatorLike?.platform || "";
+  const touchPoints = Number(navigatorLike?.maxTouchPoints || 0);
+  const appleTouchDevice = /iPhone|iPad|iPod/i.test(userAgent) || (platform === "MacIntel" && touchPoints > 1);
+  const otherMobileDevice = /Android|Mobile/i.test(userAgent) || (touchPoints > 0 && Number(viewportWidth) <= 820);
+  return appleTouchDevice || otherMobileDevice;
+}
 
 function withTimeout(promise, milliseconds, message) {
   let timer = 0;
@@ -222,8 +231,12 @@ export class WebGPUButterEngine {
     this.device = device;
     this.context = canvas.getContext("webgpu");
     this.format = navigator.gpu.getPreferredCanvasFormat();
-    this.profileName = "balanced";
-    this.profile = QUALITY_PROFILES.balanced;
+    this.mobileSafeMode = shouldUseMobileSafeMode();
+    this.profileName = this.mobileSafeMode ? "efficient" : "balanced";
+    this.profile = QUALITY_PROFILES[this.profileName];
+    this.maximumSubsteps = this.mobileSafeMode ? 4 : 24;
+    this.telemetryInterval = this.mobileSafeMode ? 1100 : 700;
+    this.mobileQueuePending = false;
     this.materialName = "marble";
     this.environment = { ambient: 22, surface: 22, sunlight: 0, airflow: 0.2, tilt: 0 };
     this.heater = { active: false, x: 0, z: 0, power: 3000, radius: 0.018 };
@@ -610,11 +623,12 @@ export class WebGPUButterEngine {
   advance(realSeconds, timeScale) {
     if (this.deviceLostError) throw this.deviceLostError;
     if (this.reconfiguring) return 0;
+    if (this.mobileSafeMode && this.mobileQueuePending) return 0;
     const desired = Math.min(Math.max(realSeconds, 0) * timeScale, 0.96);
     const targetDt = 0.04 * this.flowStepScale;
-    const requested = Math.min(desired, targetDt * 24);
+    const requested = Math.min(desired, targetDt * this.maximumSubsteps);
     if (requested <= 0) return 0;
-    const substepCount = Math.max(1, Math.min(24, Math.ceil(requested / targetDt)));
+    const substepCount = Math.max(1, Math.min(this.maximumSubsteps, Math.ceil(requested / targetDt)));
     const dt = requested / substepCount;
     this.simulationTime += requested;
     this.updateParameterBuffer(dt);
@@ -641,7 +655,8 @@ export class WebGPUButterEngine {
 
   resize(force = false) {
     const baseScale = this.photoMode ? 1.06 : ({ efficient: 0.70, balanced: 0.84, high: 1.0 }[this.profileName] || 0.84);
-    const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.25) * baseScale;
+    const ratioLimit = this.mobileSafeMode ? 1.0 : 1.25;
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, ratioLimit) * baseScale;
     const width = Math.max(2, Math.floor(this.canvas.clientWidth * pixelRatio));
     const height = Math.max(2, Math.floor(this.canvas.clientHeight * pixelRatio));
     if (!force && this.canvas.width === width && this.canvas.height === height) return false;
@@ -704,7 +719,7 @@ export class WebGPUButterEngine {
 
   render() {
     if (this.deviceLostError) throw this.deviceLostError;
-    if (this.reconfiguring) return;
+    if (this.reconfiguring || (this.mobileSafeMode && this.mobileQueuePending)) return false;
     this.resize();
     this.updateParameterBuffer(0.02);
     this.updateSceneBuffer();
@@ -739,6 +754,17 @@ export class WebGPUButterEngine {
     pass.drawIndexed(this.indexCount);
     pass.end();
     this.device.queue.submit([encoder.finish()]);
+    if (this.mobileSafeMode) {
+      this.mobileQueuePending = true;
+      this.device.queue.onSubmittedWorkDone().then(
+        () => { this.mobileQueuePending = false; },
+        (error) => {
+          this.mobileQueuePending = false;
+          this.reportDeviceError(error);
+        },
+      );
+    }
+    return true;
   }
 
   orbit(deltaX, deltaY) {

@@ -1,16 +1,17 @@
-import { WebGPUButterEngine } from "./webgpu-engine.js?v=0.6.0";
+import { WebGPUButterEngine } from "./webgpu-engine.js?v=0.7.0";
 import {
   BUTTER,
   DOMAIN,
   ENVIRONMENT_PRESETS,
   MATERIALS,
   QUALITY_PROFILES,
+  cellStateIsFinite,
   enthalpyToTemperature,
   enthalpyToTemperatureFast,
   formatSimulationClock,
   solidFatContent,
   transitionFraction,
-} from "./physics-model.js?v=0.6.0";
+} from "./physics-model.js?v=0.7.0";
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -44,6 +45,8 @@ let resumeAfterPhoto = false;
 let fatalError = false;
 let flowThetaMin = 1;
 let flowLimitedFraction = 0;
+let numericalRecoveryAttempted = false;
+let numericalRecoveryInProgress = false;
 
 const controls = {
   ambient: $("#ambient-temp"),
@@ -62,6 +65,16 @@ const outputs = {
   tilt: $("#tilt-out"),
   heaterPower: $("#heater-power-out"),
 };
+
+function syncQualityUi(profileName, detail = "") {
+  $$(".quality").forEach((button) => {
+    const selected = button.dataset.quality === profileName;
+    button.classList.toggle("is-active", selected);
+    button.setAttribute("aria-pressed", String(selected));
+  });
+  const suffix = detail ? ` · ${detail}` : "";
+  qualityCopy.textContent = `${QUALITY_PROFILES[profileName].label}${suffix}`;
+}
 
 function updateSliderFill(input) {
   const min = Number(input.min);
@@ -162,6 +175,7 @@ function resetExperiment() {
   initialFootprint = engine?.initialFootprint || 0;
   flowThetaMin = 1;
   flowLimitedFraction = 0;
+  numericalRecoveryAttempted = false;
   lastTelemetryTime = -Infinity;
   setMetricText("#metric-temp", "7.0", "°C");
   setMetricText("#metric-melt", "0.0", "%");
@@ -205,8 +219,10 @@ function analyzeState(snapshot) {
   const donorScales = snapshot.donorScale || null;
   const width = engine.profile.width;
   const height = engine.profile.height;
+  if (!data || data.length < width * height * 12) return null;
   const cellArea = engine.dx * engine.dz;
   let volume = 0;
+  let validThermalHeight = 0;
   let weightedTemperature = 0;
   let weightedTransition = 0;
   let weightedSfc = 0;
@@ -215,30 +231,47 @@ function analyzeState(snapshot) {
   let thetaMin = 1;
   let wetCells = 0;
   let limitedCells = 0;
+  let invalidWetCells = 0;
+  let invalidDonorScales = 0;
   const centerX = (width - 1) / 2;
   const centerZ = (height - 1) / 2;
   for (let index = 0; index < width * height; index += 1) {
     const offset = index * 12;
-    const h = Math.max(0, data[offset]);
+    const rawHeight = data[offset];
+    if (!Number.isFinite(rawHeight)) {
+      invalidWetCells += 1;
+      continue;
+    }
+    const h = Math.max(0, rawHeight);
     if (h <= 0) continue;
     volume += h * cellArea;
-    weightedTemperature += h * data[offset + 2];
-    let layerTransition = 0;
-    let layerSfc = 0;
-    for (let layer = 0; layer < 8; layer += 1) {
-      const layerTemperature = enthalpyToTemperatureFast(data[offset + 4 + layer]);
-      layerTransition += transitionFraction(layerTemperature);
-      layerSfc += solidFatContent(layerTemperature);
+    if (cellStateIsFinite(data, offset)) {
+      weightedTemperature += h * data[offset + 2];
+      let layerTransition = 0;
+      let layerSfc = 0;
+      for (let layer = 0; layer < 8; layer += 1) {
+        const layerTemperature = enthalpyToTemperatureFast(data[offset + 4 + layer]);
+        layerTransition += transitionFraction(layerTemperature);
+        layerSfc += solidFatContent(layerTemperature);
+      }
+      validThermalHeight += h;
+      weightedTransition += h * layerTransition * 0.125;
+      weightedSfc += h * layerSfc * 0.125;
+    } else {
+      invalidWetCells += 1;
     }
-    weightedTransition += h * layerTransition * 0.125;
-    weightedSfc += h * layerSfc * 0.125;
     if (h > 2e-5) {
       footprintCells += 1;
       wetCells += 1;
       if (donorScales) {
-        const theta = Math.max(0, Math.min(1, donorScales[index]));
-        thetaMin = Math.min(thetaMin, theta);
-        if (theta < 0.999) limitedCells += 1;
+        const rawTheta = donorScales[index];
+        if (Number.isFinite(rawTheta)) {
+          const theta = Math.max(0, Math.min(1, rawTheta));
+          thetaMin = Math.min(thetaMin, theta);
+          if (theta < 0.999) limitedCells += 1;
+        } else {
+          invalidDonorScales += 1;
+        }
       }
       const x = index % width;
       const z = Math.floor(index / width);
@@ -246,29 +279,49 @@ function analyzeState(snapshot) {
       maxRadius = Math.max(maxRadius, radius);
     }
   }
-  if (volume <= 0) return null;
+  if (volume <= 0 || validThermalHeight <= 0) return {
+    healthy: false,
+    invalidWetCells: Math.max(1, invalidWetCells),
+    invalidDonorScales,
+  };
   const mass = volume * BUTTER.density;
   const centerOffset = (Math.floor(height / 2) * width + Math.floor(width / 2)) * 12;
-  const coreTemperature = 0.5 * (
-    enthalpyToTemperature(data[centerOffset + 7]) +
-    enthalpyToTemperature(data[centerOffset + 8])
-  );
-  return {
+  const meanTemperature = weightedTemperature / validThermalHeight;
+  const coreCandidate = cellStateIsFinite(data, centerOffset)
+    ? 0.5 * (
+      enthalpyToTemperature(data[centerOffset + 7]) +
+      enthalpyToTemperature(data[centerOffset + 8])
+    )
+    : meanTemperature;
+  const metrics = {
     mass,
     massBalance: mass / engine.initialMass,
-    meanTemperature: weightedTemperature / (volume / cellArea),
-    transition: weightedTransition / (volume / cellArea),
-    sfc: weightedSfc / (volume / cellArea),
-    coreTemperature,
+    meanTemperature,
+    transition: weightedTransition / validThermalHeight,
+    sfc: weightedSfc / validThermalHeight,
+    coreTemperature: coreCandidate,
     footprint: footprintCells * cellArea,
     maxRadius,
     thetaMin,
     limitedFraction: wetCells ? limitedCells / wetCells : 0,
+    invalidWetCells,
+    invalidDonorScales,
   };
+  const finiteMetrics = [
+    metrics.mass,
+    metrics.massBalance,
+    metrics.meanTemperature,
+    metrics.transition,
+    metrics.sfc,
+    metrics.coreTemperature,
+    metrics.footprint,
+  ].every(Number.isFinite);
+  metrics.healthy = finiteMetrics && invalidWetCells === 0 && invalidDonorScales === 0;
+  return metrics;
 }
 
 function updateTelemetry(metrics) {
-  if (!metrics || !engine) return;
+  if (!metrics?.healthy || !engine) return;
   if (!initialFootprint) initialFootprint = engine.initialFootprint || metrics.footprint;
   flowThetaMin = metrics.thetaMin;
   flowLimitedFraction = metrics.limitedFraction;
@@ -331,13 +384,57 @@ function drawHistory() {
   plot((item) => item.melt, "rgba(116,178,190,.85)", 1.0);
 }
 
+async function recoverNumericalState(metrics) {
+  if (!engine || numericalRecoveryInProgress || fatalError) return;
+  if (numericalRecoveryAttempted) {
+    showFatalError(new Error(
+      "The thermal solver returned invalid data again. Reload in Safari and use the Efficient profile.",
+    ));
+    return;
+  }
+  numericalRecoveryAttempted = true;
+  numericalRecoveryInProgress = true;
+  setPlaying(false);
+  engineBadge.classList.remove("is-ready");
+  engineBadge.innerHTML = "<i></i> Recovering thermal state";
+  qualityCopy.textContent = `Phone-safe recovery · ${metrics?.invalidWetCells || 0} invalid columns`;
+  telemetryGeneration += 1;
+  try {
+    if (engine.profileName !== "efficient") await engine.setQuality("efficient");
+    else engine.reset();
+    timeScale = Math.min(timeScale, 10);
+    $("#time-scale").value = String(timeScale);
+    syncQualityUi("efficient", "phone-safe recovery");
+    history = [];
+    initialFootprint = engine.initialFootprint;
+    flowThetaMin = 1;
+    flowLimitedFraction = 0;
+    lastTelemetryTime = -Infinity;
+    setMetricText("#metric-temp", "7.0", "°C");
+    setMetricText("#metric-melt", "0.0", "%");
+    $("#metric-core").textContent = "core 7.0 °C";
+    $("#metric-state").textContent = "crystal network intact";
+    setPlaying(true);
+    updateEngineBadge();
+  } catch (error) {
+    showFatalError(error);
+  } finally {
+    numericalRecoveryInProgress = false;
+  }
+}
+
 async function requestTelemetry() {
   if (!engine) return;
   const generation = telemetryGeneration;
   try {
     const snapshot = await engine.readState();
     if (generation !== telemetryGeneration || !snapshot) return;
-    updateTelemetry(analyzeState(snapshot));
+    const metrics = analyzeState(snapshot);
+    if (!metrics?.healthy) {
+      await recoverNumericalState(metrics);
+      return;
+    }
+    updateTelemetry(metrics);
   } catch (error) {
     console.warn("Telemetry readback skipped:", error);
   }
@@ -491,17 +588,17 @@ function frame(now) {
     const delta = Math.min((now - lastFrameTime) / 1000, 0.05);
     lastFrameTime = now;
     if (playing && !document.hidden) engine.advance(delta, timeScale);
-    engine.render();
+    const rendered = engine.render();
     $("#sim-clock").textContent = formatSimulationClock(engine.simulationTime);
 
-    framesSinceCounter += 1;
+    if (rendered) framesSinceCounter += 1;
     if (now - frameCounterTime >= 1000) {
       currentFps = Math.round((framesSinceCounter * 1000) / (now - frameCounterTime));
       framesSinceCounter = 0;
       frameCounterTime = now;
       updateEngineBadge();
     }
-    if (now - lastTelemetryTime > 700 && !engine.readbackPending && !engine.reconfiguring) {
+    if (now - lastTelemetryTime > engine.telemetryInterval && !engine.readbackPending && !engine.reconfiguring) {
       lastTelemetryTime = now;
       requestTelemetry();
     }
@@ -534,12 +631,7 @@ function bindUi() {
     try {
       const changed = await engine.setQuality(profileName);
       if (!changed) return;
-      $$(".quality").forEach((item) => {
-        const selected = item === button;
-        item.classList.toggle("is-active", selected);
-        item.setAttribute("aria-pressed", String(selected));
-      });
-      qualityCopy.textContent = `${QUALITY_PROFILES[profileName].label} · tuned for 6 GB VRAM`;
+      syncQualityUi(profileName, engine.mobileSafeMode ? "mobile substep guard active" : engine.adapterDescription);
       history = [];
       initialFootprint = 0;
     } catch (error) {
@@ -636,7 +728,7 @@ function showFatalError(error) {
   engineBadge.classList.remove("is-ready");
   engineBadge.innerHTML = "<i></i> GPU stopped";
   const message = error instanceof Error ? error.message : String(error);
-  errorCopy.textContent = `${message} This PC has a compatible GTX 1660 Ti and current driver, so also confirm that Chrome hardware acceleration is enabled.`;
+  errorCopy.textContent = `${message} Reload the page and try the Efficient profile. On iPhone, open the link in Safari for the most reliable WebGPU session.`;
   requestAnimationFrame(() => errorPanel.focus());
 }
 
@@ -660,9 +752,27 @@ async function initialize() {
     });
     engine.setDeviceLostHandler((error) => showFatalError(error));
     if (fatalError || engine.deviceLostError) return;
+    if (engine.mobileSafeMode) {
+      timeScale = 10;
+      $("#time-scale").value = "10";
+      document.body.classList.add("mobile-safe");
+    }
+    syncQualityUi(
+      engine.profileName,
+      engine.mobileSafeMode ? `${engine.adapterDescription} · phone-safe` : engine.adapterDescription,
+    );
+    bootStatus.textContent = "Checking thermal solver health…";
+    bootProgress.style.width = "97%";
+    engine.advance(0.04, 1);
+    await engine.device.queue.onSubmittedWorkDone();
+    const healthSnapshot = await engine.readState();
+    const healthMetrics = analyzeState(healthSnapshot);
+    if (!healthMetrics?.healthy) {
+      throw new Error("The GPU returned invalid thermal data during its startup check.");
+    }
+    engine.reset();
     bootStatus.textContent = "Material state ready.";
     bootProgress.style.width = "100%";
-    qualityCopy.textContent = `${QUALITY_PROFILES.balanced.label} · ${engine.adapterDescription}`;
     syncEnvironment();
     engine.setMaterial("marble");
     engine.setHeater({ power: Number(controls.heaterPower.value) * 1000 });

@@ -28,7 +28,7 @@ export const ENTHALPY_INVERSE_KNOTS = Object.freeze([
 ]);
 
 export const QUALITY_PROFILES = Object.freeze({
-  efficient: Object.freeze({ width: 192, height: 120, label: "Efficient · 23,040 columns" }),
+  efficient: Object.freeze({ width: 160, height: 100, label: "Efficient · 16,000 columns" }),
   balanced: Object.freeze({ width: 256, height: 160, label: "Balanced · 40,960 columns" }),
   high: Object.freeze({ width: 320, height: 200, label: "High · 64,000 columns" }),
 });
@@ -99,8 +99,12 @@ export const smoothstep = (edge0, edge1, value) => {
   return x * x * (3 - 2 * x);
 };
 
+// Keep the transcendental input in a range that is portable across Metal,
+// Direct3D, and Vulkan shader backends. At |x| = 10, tanh is already within
+// 4.2e-9 of its asymptote, so this changes no meaningful thermodynamics while
+// avoiding overflow-prone fast-math lowering on mobile GPUs.
 const transition = (temperature, peak, width) =>
-  0.5 * (1 + Math.tanh((temperature - peak) / width));
+  0.5 * (1 + Math.tanh(clamp((temperature - peak) / width, -10, 10)));
 
 export function temperatureToEnthalpy(temperature) {
   let result = BUTTER.heatCapacity * (temperature - BUTTER.referenceTemperature);
@@ -118,6 +122,7 @@ export function enthalpyToTemperature(enthalpy) {
   // The enthalpy curve is monotone. Bisection is slower than a LUT, but this
   // reference function is deterministic and is used only for initialization,
   // tests, and telemetry. The GPU evaluates the same curve in WGSL.
+  if (!Number.isFinite(enthalpy)) return NaN;
   const totalLatent = BUTTER.latentWeights.reduce((sum, value) => sum + value, 0);
   if (enthalpy <= temperatureToEnthalpy(-20)) return enthalpy / BUTTER.heatCapacity;
   if (enthalpy >= temperatureToEnthalpy(50)) return (enthalpy - totalLatent) / BUTTER.heatCapacity;
@@ -132,6 +137,7 @@ export function enthalpyToTemperature(enthalpy) {
 }
 
 export function enthalpyToTemperatureFast(enthalpy) {
+  if (!Number.isFinite(enthalpy)) return NaN;
   if (enthalpy <= ENTHALPY_INVERSE_KNOTS[0][1]) return enthalpy / BUTTER.heatCapacity;
   for (let index = 1; index < ENTHALPY_INVERSE_KNOTS.length; index += 1) {
     const [rightTemperature, rightEnthalpy] = ENTHALPY_INVERSE_KNOTS[index];
@@ -172,6 +178,7 @@ export function solidFatContent(temperature) {
     [40, 0],
     [80, 0],
   ];
+  if (!Number.isFinite(temperature)) return NaN;
   if (temperature <= points[0][0]) return points[0][1];
   for (let index = 1; index < points.length; index += 1) {
     const [rightT, rightValue] = points[index];
@@ -388,4 +395,26 @@ export function layeredStateAverages(enthalpies) {
   }
   const count = Math.max(1, enthalpies.length);
   return { temperature: temperature / count, transition: transitioned / count, sfc: sfc / count };
+}
+
+export function cellStateIsFinite(data, offset = 0) {
+  if (!data || offset < 0 || offset + 11 >= data.length) return false;
+  for (let channel = 0; channel < 12; channel += 1) {
+    if (!Number.isFinite(data[offset + channel])) return false;
+  }
+  const height = data[offset];
+  const substrateTemperature = data[offset + 1];
+  const meanTemperature = data[offset + 2];
+  const sfc = data[offset + 3];
+  if (height < -1e-6 || height > 0.05) return false;
+  if (substrateTemperature < -40.01 || substrateTemperature > 120.01) return false;
+  if (meanTemperature < -40.01 || meanTemperature > 120.01) return false;
+  if (sfc < -1e-4 || sfc > 0.621) return false;
+  const lowEnthalpy = temperatureToEnthalpy(-40) - 1;
+  const highEnthalpy = temperatureToEnthalpy(120) + 1;
+  for (let layer = 0; layer < DOMAIN.layers; layer += 1) {
+    const enthalpy = data[offset + 4 + layer];
+    if (enthalpy < lowEnthalpy || enthalpy > highEnthalpy) return false;
+  }
+  return true;
 }

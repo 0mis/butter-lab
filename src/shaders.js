@@ -5,6 +5,8 @@ const GRAVITY: f32 = 9.80665;
 const BUTTER_K: f32 = 0.24;
 const CP: f32 = 2050.0;
 const SIGMA: f32 = 5.6703744e-8;
+const THERMAL_MIN_C: f32 = -40.0;
+const THERMAL_MAX_C: f32 = 120.0;
 
 struct Cell {
   geom: vec4f,       // height, substrate temperature, mean butter temperature, mean solid-fat content
@@ -24,8 +26,23 @@ struct Params {
 
 fn saturate(value: f32) -> f32 { return clamp(value, 0.0, 1.0); }
 
+fn finiteOr(value: f32, fallback: f32) -> f32 {
+  // WGSL intentionally has no isNaN/isInf built-ins. IEEE-754 exponent bits
+  // classify both infinities and NaNs without invoking more floating math.
+  let bits = bitcast<u32>(value);
+  let nonFinite = (bits & 0x7f800000u) == 0x7f800000u;
+  return select(value, fallback, nonFinite);
+}
+
+fn finiteClamp(value: f32, low: f32, high: f32, fallback: f32) -> f32 {
+  return clamp(finiteOr(value, fallback), low, high);
+}
+
 fn transition(t: f32, peak: f32, width: f32) -> f32 {
-  return 0.5 * (1.0 + tanh((t - peak) / width));
+  // Some mobile shader backends lower large tanh inputs through exponentials.
+  // The phase curve is already at its asymptote by |x| = 10, so clamping here
+  // prevents Inf/Inf without changing the modeled transition.
+  return 0.5 * (1.0 + tanh(clamp((t - peak) / width, -10.0, 10.0)));
 }
 
 fn temperatureToEnthalpy(t: f32) -> f32 {
@@ -38,23 +55,24 @@ fn temperatureToEnthalpy(t: f32) -> f32 {
 fn enthalpyToTemperature(value: f32) -> f32 {
   // Compact monotone inverse LUT. Dense knots surround each DSC transition;
   // linear lookup avoids hundreds of transcendental evaluations per column.
-  if (value < 0.0) { return value / CP; }
-  if (value < 10250.044) { return mix(0.0, 5.0, value / 10250.044); }
-  if (value < 16402.385) { return mix(5.0, 8.0, (value - 10250.044) / 6152.341); }
-  if (value < 20534.213) { return mix(8.0, 10.0, (value - 16402.385) / 4131.828); }
-  if (value < 25070.503) { return mix(10.0, 12.0, (value - 20534.213) / 4536.290); }
-  if (value < 32835.731) { return mix(12.0, 14.0, (value - 25070.503) / 7765.228); }
-  if (value < 42219.588) { return mix(14.0, 16.0, (value - 32835.731) / 9383.857); }
-  if (value < 51447.200) { return mix(16.0, 18.0, (value - 42219.588) / 9227.612); }
-  if (value < 62037.212) { return mix(18.0, 20.0, (value - 51447.200) / 10590.012); }
-  if (value < 67284.751) { return mix(20.0, 22.0, (value - 62037.212) / 5247.539); }
-  if (value < 73577.140) { return mix(22.0, 25.0, (value - 67284.751) / 6292.389); }
-  if (value < 80672.674) { return mix(25.0, 28.0, (value - 73577.140) / 7095.534); }
-  if (value < 89435.903) { return mix(28.0, 30.0, (value - 80672.674) / 8763.229); }
-  if (value < 103330.747) { return mix(30.0, 32.0, (value - 89435.903) / 13894.844); }
-  if (value < 114838.002) { return mix(32.0, 35.0, (value - 103330.747) / 11507.255); }
-  if (value < 125470.358) { return mix(35.0, 40.0, (value - 114838.002) / 10632.356); }
-  return (value - 43473.0) / CP;
+  let safeValue = finiteOr(value, temperatureToEnthalpy(7.0));
+  if (safeValue < 0.0) { return safeValue / CP; }
+  if (safeValue < 10250.044) { return mix(0.0, 5.0, safeValue / 10250.044); }
+  if (safeValue < 16402.385) { return mix(5.0, 8.0, (safeValue - 10250.044) / 6152.341); }
+  if (safeValue < 20534.213) { return mix(8.0, 10.0, (safeValue - 16402.385) / 4131.828); }
+  if (safeValue < 25070.503) { return mix(10.0, 12.0, (safeValue - 20534.213) / 4536.290); }
+  if (safeValue < 32835.731) { return mix(12.0, 14.0, (safeValue - 25070.503) / 7765.228); }
+  if (safeValue < 42219.588) { return mix(14.0, 16.0, (safeValue - 32835.731) / 9383.857); }
+  if (safeValue < 51447.200) { return mix(16.0, 18.0, (safeValue - 42219.588) / 9227.612); }
+  if (safeValue < 62037.212) { return mix(18.0, 20.0, (safeValue - 51447.200) / 10590.012); }
+  if (safeValue < 67284.751) { return mix(20.0, 22.0, (safeValue - 62037.212) / 5247.539); }
+  if (safeValue < 73577.140) { return mix(22.0, 25.0, (safeValue - 67284.751) / 6292.389); }
+  if (safeValue < 80672.674) { return mix(25.0, 28.0, (safeValue - 73577.140) / 7095.534); }
+  if (safeValue < 89435.903) { return mix(28.0, 30.0, (safeValue - 80672.674) / 8763.229); }
+  if (safeValue < 103330.747) { return mix(30.0, 32.0, (safeValue - 89435.903) / 13894.844); }
+  if (safeValue < 114838.002) { return mix(32.0, 35.0, (safeValue - 103330.747) / 11507.255); }
+  if (safeValue < 125470.358) { return mix(35.0, 40.0, (safeValue - 114838.002) / 10632.356); }
+  return (safeValue - 43473.0) / CP;
 }
 
 fn smoothMix(a: f32, b: f32, amount: f32) -> f32 {
@@ -77,6 +95,32 @@ fn solidFatContent(t: f32) -> f32 {
 fn enthalpyAt(cell: Cell, layer: u32) -> f32 {
   if (layer < 4u) { return cell.thermal0[layer]; }
   return cell.thermal1[layer - 4u];
+}
+
+fn sanitizeCell(cell: Cell) -> Cell {
+  let fallbackEnthalpy = temperatureToEnthalpy(7.0);
+  let lowEnthalpy = temperatureToEnthalpy(THERMAL_MIN_C);
+  let highEnthalpy = temperatureToEnthalpy(THERMAL_MAX_C);
+  var safe: Cell;
+  safe.geom = vec4f(
+    max(finiteOr(cell.geom.x, 0.0), 0.0),
+    finiteClamp(cell.geom.y, THERMAL_MIN_C, THERMAL_MAX_C, 22.0),
+    finiteClamp(cell.geom.z, THERMAL_MIN_C, THERMAL_MAX_C, 7.0),
+    finiteClamp(cell.geom.w, 0.0, 0.62, solidFatContent(7.0))
+  );
+  safe.thermal0 = vec4f(
+    finiteClamp(cell.thermal0.x, lowEnthalpy, highEnthalpy, fallbackEnthalpy),
+    finiteClamp(cell.thermal0.y, lowEnthalpy, highEnthalpy, fallbackEnthalpy),
+    finiteClamp(cell.thermal0.z, lowEnthalpy, highEnthalpy, fallbackEnthalpy),
+    finiteClamp(cell.thermal0.w, lowEnthalpy, highEnthalpy, fallbackEnthalpy)
+  );
+  safe.thermal1 = vec4f(
+    finiteClamp(cell.thermal1.x, lowEnthalpy, highEnthalpy, fallbackEnthalpy),
+    finiteClamp(cell.thermal1.y, lowEnthalpy, highEnthalpy, fallbackEnthalpy),
+    finiteClamp(cell.thermal1.z, lowEnthalpy, highEnthalpy, fallbackEnthalpy),
+    finiteClamp(cell.thermal1.w, lowEnthalpy, highEnthalpy, fallbackEnthalpy)
+  );
+  return safe;
 }
 `;
 
@@ -106,14 +150,14 @@ fn cellIndex(x: i32, z: i32) -> u32 {
   return u32(safeZ * width() + safeX);
 }
 
-fn loadCell(x: i32, z: i32) -> Cell { return source[cellIndex(x, z)]; }
+fn loadCell(x: i32, z: i32) -> Cell { return sanitizeCell(source[cellIndex(x, z)]); }
 fn cellHeight(x: i32, z: i32) -> f32 { return loadCell(x, z).geom.x; }
 
 fn mobileLayerWeightAt(cell: Cell, layer: u32) -> f32 {
   let temperature = enthalpyToTemperature(enthalpyAt(cell, layer));
   let network = smoothstep(0.04, 0.20, solidFatContent(temperature));
   let fluidity = 1.0 - network;
-  return fluidity * fluidity;
+  return finiteClamp(fluidity * fluidity, 0.0, 1.0, 0.0);
 }
 
 fn mobileLayerState(cell: Cell) -> vec2f {
@@ -171,13 +215,13 @@ fn rawFaceFlux(x0: i32, z0: i32, x1: i32, z1: i32, axis: u32) -> f32 {
   let slopeActivation = min(abs(slope) * 4.0, 1.0);
   let transportBudget = 0.012 * min(h0, h1) * slopeActivation;
   let maximumFlux = (levelingBudget + transportBudget) * spacing / max(params.timing.x, 1.0e-6);
-  return clamp(physicalFlux, -maximumFlux, maximumFlux);
+  return finiteOr(clamp(physicalFlux, -maximumFlux, maximumFlux), 0.0);
 }
 
 fn storedFaceFlux(x0: i32, z0: i32, x1: i32, z1: i32, axis: u32) -> f32 {
   if (!inside(x0, z0) || !inside(x1, z1)) { return 0.0; }
   let scratchA = flowScratch[cellIndex(x0, z0)].values;
-  return select(scratchA.y, scratchA.x, axis == 0u);
+  return finiteOr(select(scratchA.y, scratchA.x, axis == 0u), 0.0);
 }
 
 fn limitedFace(x0: i32, z0: i32, x1: i32, z1: i32, axis: u32) -> f32 {
@@ -185,13 +229,13 @@ fn limitedFace(x0: i32, z0: i32, x1: i32, z1: i32, axis: u32) -> f32 {
   let raw = storedFaceFlux(x0, z0, x1, z1, axis);
   let scalesA = donorScales[cellIndex(x0, z0)];
   let scalesB = donorScales[cellIndex(x1, z1)];
-  let donorA = scalesA.x;
-  let donorB = scalesB.x;
-  let receiverA = scalesA.y;
-  let receiverB = scalesB.y;
+  let donorA = finiteClamp(scalesA.x, 0.0, 1.0, 0.0);
+  let donorB = finiteClamp(scalesB.x, 0.0, 1.0, 0.0);
+  let receiverA = finiteClamp(scalesA.y, 0.0, 1.0, 0.0);
+  let receiverB = finiteClamp(scalesB.y, 0.0, 1.0, 0.0);
   let donor = select(donorB, donorA, raw >= 0.0);
   let receiver = select(receiverA, receiverB, raw >= 0.0);
-  return raw * min(donor, receiver);
+  return finiteOr(raw * min(donor, receiver), 0.0);
 }
 
 fn hydraulicHead(x: i32, z: i32) -> f32 {
@@ -247,7 +291,7 @@ fn computeRawFaces(@builtin(global_invocation_id) gid: vec3u) {
   if (x >= width() || z >= height()) { return; }
   let qRight = rawFaceFlux(x, z, x + 1, z, 0u);
   let qUp = rawFaceFlux(x, z, x, z + 1, 1u);
-  flowScratch[cellIndex(x, z)].values = vec4f(qRight, qUp, 1.0, 0.0);
+  flowScratch[cellIndex(x, z)].values = vec4f(qRight, qUp, 0.0, 0.0);
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -275,7 +319,7 @@ fn computeDonorScale(@builtin(global_invocation_id) gid: vec3u) {
       theta = 0.0;
     }
   }
-  donorScales[index] = vec2f(theta, 1.0);
+  donorScales[index] = vec2f(finiteClamp(theta, 0.0, 1.0, 0.0), 1.0);
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -304,7 +348,7 @@ fn computeReceiverScale(@builtin(global_invocation_id) gid: vec3u) {
     receiverTheta = clamp(roomRate / incoming, 0.0, 1.0);
   }
   var scales = donorScales[index];
-  scales.y = receiverTheta;
+  scales.y = finiteClamp(receiverTheta, 0.0, 1.0, 0.0);
   donorScales[index] = scales;
 }
 
@@ -333,7 +377,7 @@ fn simulate(@builtin(global_invocation_id) gid: vec3u) {
   let qDown = limitedFace(x, z - 1, x, z, 1u);
 
   let oldHeight = max(center.geom.x, 0.0);
-  let newHeight = oldHeight - dt * ((qRight - qLeft) / dx + (qUp - qDown) / dz);
+  let newHeight = finiteOr(oldHeight - dt * ((qRight - qLeft) / dx + (qUp - qDown) / dz), oldHeight);
 
   var centerMobileWeights: array<f32, 8>;
   var leftMobileWeights: array<f32, 8>;
@@ -392,7 +436,7 @@ fn simulate(@builtin(global_invocation_id) gid: vec3u) {
     if (oldHeight > 0.0 && layer < 7u) {
       arealEnthalpy += oldHeight * verticalPairDelta(hSpecific, enthalpyAt(center, layer + 1u), dt, layerDepth);
     }
-    newArealEnthalpy[layer] = arealEnthalpy;
+    newArealEnthalpy[layer] = finiteOr(arealEnthalpy, oldHeight * hSpecific);
   }
 
   let substrateLap = (left.geom.y - 2.0 * center.geom.y + right.geom.y) / (dx * dx)
@@ -406,16 +450,23 @@ fn simulate(@builtin(global_invocation_id) gid: vec3u) {
   let substrateSolar = saturate(params.material2.y) * params.environment.z * transmission;
   let relaxation = (params.environment.y - center.geom.y) / max(params.material2.x, 1.0);
   let substrateSource = (substrateSolar + heaterFlux) / max(params.material.z, 1000.0);
-  var newSubstrate = center.geom.y + dt * (params.material.y * substrateLap + relaxation + substrateSource);
+  var newSubstrate = finiteClamp(
+    center.geom.y + dt * (params.material.y * substrateLap + relaxation + substrateSource),
+    THERMAL_MIN_C,
+    THERMAL_MAX_C,
+    center.geom.y
+  );
 
   if (newHeight > 1.0e-12) {
     // The free-surface solve is implicit in enthalpy, so convection and
     // radiation remain monotone even for a micrometre-scale film.
-    let topHStar = newArealEnthalpy[7] / newHeight;
-    let topTStar = enthalpyToTemperature(topHStar);
+    let lowEnthalpy = temperatureToEnthalpy(THERMAL_MIN_C);
+    let highEnthalpy = temperatureToEnthalpy(THERMAL_MAX_C);
+    let topHStar = finiteClamp(newArealEnthalpy[7] / newHeight, lowEnthalpy, highEnthalpy, enthalpyAt(center, 7u));
+    let topTStar = finiteClamp(enthalpyToTemperature(topHStar), THERMAL_MIN_C, THERMAL_MAX_C, center.geom.z);
     let airCoefficient = clamp(4.2 + 7.1 * sqrt(max(params.environment.w, 0.0)), 3.0, 25.0);
-    var lowT = min(topTStar, params.environment.x) - 150.0;
-    var highT = max(topTStar, params.environment.x) + 600.0;
+    var lowT = THERMAL_MIN_C;
+    var highT = THERMAL_MAX_C;
     for (var iteration = 0u; iteration < 28u; iteration = iteration + 1u) {
       let middleT = 0.5 * (lowT + highT);
       if (surfaceResidual(middleT, topHStar, newHeight, dt, airCoefficient, solarButter) > 0.0) {
@@ -424,15 +475,18 @@ fn simulate(@builtin(global_invocation_id) gid: vec3u) {
         lowT = middleT;
       }
     }
-    newArealEnthalpy[7] = newHeight * temperatureToEnthalpy(0.5 * (lowT + highT));
+    newArealEnthalpy[7] = finiteOr(
+      newHeight * temperatureToEnthalpy(0.5 * (lowT + highT)),
+      newHeight * topHStar
+    );
 
     // Backward-Euler contact exchange is solved as one equal-and-opposite
     // energy transfer between the substrate and bottom butter layer.
     let substrateCapacity = max(params.material.z, 1000.0);
-    let bottomHStar = newArealEnthalpy[0] / newHeight;
-    let bottomTEstimate = enthalpyToTemperature(bottomHStar);
-    var lowContactT = min(bottomTEstimate, newSubstrate) - 200.0;
-    var highContactT = max(bottomTEstimate, newSubstrate) + 200.0;
+    let bottomHStar = finiteClamp(newArealEnthalpy[0] / newHeight, lowEnthalpy, highEnthalpy, enthalpyAt(center, 0u));
+    let bottomTEstimate = finiteClamp(enthalpyToTemperature(bottomHStar), THERMAL_MIN_C, THERMAL_MAX_C, center.geom.z);
+    var lowContactT = THERMAL_MIN_C;
+    var highContactT = THERMAL_MAX_C;
     for (var iteration = 0u; iteration < 24u; iteration = iteration + 1u) {
       let middleContactT = 0.5 * (lowContactT + highContactT);
       if (contactTemperatureResidual(middleContactT, bottomHStar, newHeight, newSubstrate, substrateCapacity, dt) > 0.0) {
@@ -441,15 +495,22 @@ fn simulate(@builtin(global_invocation_id) gid: vec3u) {
         lowContactT = middleContactT;
       }
     }
-    let contactTemperature = 0.5 * (lowContactT + highContactT);
-    let contactEnergy = RHO * newHeight * (temperatureToEnthalpy(contactTemperature) - bottomHStar) * 0.125;
+    let contactTemperature = finiteClamp(0.5 * (lowContactT + highContactT), THERMAL_MIN_C, THERMAL_MAX_C, bottomTEstimate);
+    let contactEnergy = finiteOr(RHO * newHeight * (temperatureToEnthalpy(contactTemperature) - bottomHStar) * 0.125, 0.0);
     newArealEnthalpy[0] += 8.0 * contactEnergy / RHO;
-    newSubstrate -= contactEnergy / substrateCapacity;
+    newSubstrate = finiteClamp(newSubstrate - contactEnergy / substrateCapacity, THERMAL_MIN_C, THERMAL_MAX_C, center.geom.y);
   }
 
+  let minimumEnthalpy = temperatureToEnthalpy(THERMAL_MIN_C);
+  let maximumEnthalpy = temperatureToEnthalpy(THERMAL_MAX_C);
   for (var layer = 0u; layer < 8u; layer = layer + 1u) {
     if (newHeight > 1.0e-12) {
-      newEnthalpies[layer] = newArealEnthalpy[layer] / newHeight;
+      newEnthalpies[layer] = finiteClamp(
+        newArealEnthalpy[layer] / newHeight,
+        minimumEnthalpy,
+        maximumEnthalpy,
+        enthalpyAt(center, layer)
+      );
     } else {
       newEnthalpies[layer] = ambientEnthalpy;
     }
@@ -458,7 +519,12 @@ fn simulate(@builtin(global_invocation_id) gid: vec3u) {
   var meanTemperature = 0.0;
   var meanSfc = 0.0;
   for (var layer = 0u; layer < 8u; layer = layer + 1u) {
-    let layerTemperature = enthalpyToTemperature(newEnthalpies[layer]);
+    let layerTemperature = finiteClamp(
+      enthalpyToTemperature(newEnthalpies[layer]),
+      THERMAL_MIN_C,
+      THERMAL_MAX_C,
+      center.geom.z
+    );
     meanTemperature += layerTemperature;
     meanSfc += solidFatContent(layerTemperature);
   }
@@ -469,7 +535,7 @@ fn simulate(@builtin(global_invocation_id) gid: vec3u) {
   output.geom = vec4f(newHeight, newSubstrate, meanTemperature, meanSfc);
   output.thermal0 = vec4f(newEnthalpies[0], newEnthalpies[1], newEnthalpies[2], newEnthalpies[3]);
   output.thermal1 = vec4f(newEnthalpies[4], newEnthalpies[5], newEnthalpies[6], newEnthalpies[7]);
-  destination[cellIndex(x, z)] = output;
+  destination[cellIndex(x, z)] = sanitizeCell(output);
 }
 `;
 
@@ -494,7 +560,9 @@ fn gridHeight() -> i32 { return i32(params.grid.y); }
 fn safeIndex(x: i32, z: i32) -> u32 {
   return u32(clamp(z, 0, gridHeight() - 1) * gridWidth() + clamp(x, 0, gridWidth() - 1));
 }
-fn heightAt(x: i32, z: i32) -> f32 { return field[safeIndex(x, z)].geom.x; }
+fn heightAt(x: i32, z: i32) -> f32 {
+  return max(finiteOr(field[safeIndex(x, z)].geom.x, 0.0), 0.0);
+}
 
 fn reconstructedHeightAt(x: i32, z: i32) -> f32 {
   let center = max(heightAt(x, z), 0.0) * 4.0;
@@ -519,7 +587,7 @@ fn worldToGrid(position: vec2f) -> vec2f {
 
 fn sampleCellNearest(position: vec2f) -> Cell {
   let coordinate = worldToGrid(position);
-  return field[safeIndex(i32(round(coordinate.x)), i32(round(coordinate.y)))];
+  return sanitizeCell(field[safeIndex(i32(round(coordinate.x)), i32(round(coordinate.y)))]);
 }
 
 fn hash21(p: vec2f) -> f32 {
@@ -691,7 +759,7 @@ struct ButterVertexOut {
 fn butterVertex(@builtin(vertex_index) vertexIndex: u32) -> ButterVertexOut {
   let x = i32(vertexIndex % u32(gridWidth()));
   let z = i32(vertexIndex / u32(gridWidth()));
-  let cell = field[vertexIndex];
+  let cell = sanitizeCell(field[vertexIndex]);
   let worldX = (f32(x) / max(params.grid.x - 1.0, 1.0) - 0.5) * params.timing.y;
   let worldZ = (f32(z) / max(params.grid.y - 1.0, 1.0) - 0.5) * params.timing.z;
   let renderHeight = reconstructedHeightAt(x, z);
@@ -720,7 +788,7 @@ fn butterWallVertex(
   let side = instanceIndex % 4u;
   let x = i32(cellInstance % u32(gridWidth()));
   let z = i32(cellInstance / u32(gridWidth()));
-  let cell = field[cellInstance];
+  let cell = sanitizeCell(field[cellInstance]);
   let rawH = max(cell.geom.x, 0.0);
   let h = reconstructedHeightAt(x, z);
   var neighborX = x;
