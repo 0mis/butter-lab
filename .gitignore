@@ -1,0 +1,7 @@
+# Local operating-system and editor files
+.DS_Store
+Thumbs.db
+*.log
+
+# Generated deployment staging directory
+_site/

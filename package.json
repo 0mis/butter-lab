@@ -1,0 +1,9 @@
+{
+  "name": "butter-lab-bl05",
+  "version": "0.5.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/physics.test.mjs && node tests/math.test.mjs && node tests/static.test.mjs"
+  }
+}

@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#11110f" />
+    <meta
+      name="description"
+      content="Butter Lab BL-05 — a GPU-accelerated, physically grounded butter melting experiment."
+    />
+    <link rel="canonical" href="https://0mis.github.io/butter-lab/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Butter Lab" />
+    <meta property="og:title" content="Butter Lab BL-05 · Real-time WebGPU experiment" />
+    <meta
+      property="og:description"
+      content="Melt a physically modeled block of butter in your browser. Change heat, airflow, sunlight, surface material, and time scale in real time."
+    />
+    <meta property="og:url" content="https://0mis.github.io/butter-lab/" />
+    <meta property="og:image" content="https://0mis.github.io/butter-lab/artifacts/ButterLab-preview.png" />
+    <meta property="og:image:secure_url" content="https://0mis.github.io/butter-lab/artifacts/ButterLab-preview.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1600" />
+    <meta property="og:image:height" content="900" />
+    <meta property="og:image:alt" content="Butter Lab WebGPU simulation showing a butter block on a dark countertop with scientific controls and live telemetry." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Butter Lab BL-05 · Real-time WebGPU experiment" />
+    <meta
+      name="twitter:description"
+      content="Melt a physically modeled block of butter in your browser and change its environment in real time."
+    />
+    <meta name="twitter:image" content="https://0mis.github.io/butter-lab/artifacts/ButterLab-preview.png" />
+    <meta name="twitter:image:alt" content="Butter Lab WebGPU simulation showing a butter block with scientific controls and live telemetry." />
+    <title>Butter Lab · BL-05</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <canvas
+        id="lab-canvas"
+        tabindex="0"
+        aria-label="Interactive butter melting simulation"
+        aria-describedby="canvas-help"
+      ></canvas>
+
+      <div class="film-grain" aria-hidden="true"></div>
+
+      <header class="topbar">
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true"><span></span></div>
+          <div>
+            <p class="eyebrow">Computational food physics</p>
+            <h1>Butter Lab <em>BL–05</em></h1>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <button id="view-camera" class="segmented is-active" type="button" aria-pressed="true">Camera</button>
+          <button id="view-thermal" class="segmented" type="button" aria-pressed="false">Thermal</button>
+          <button id="view-structure" class="segmented" type="button" aria-pressed="false">Structure</button>
+          <button id="photo-mode" class="icon-button" type="button" aria-pressed="false" title="Pause for a higher-quality still">
+            <span aria-hidden="true">◎</span>
+            Photo
+          </button>
+        </div>
+      </header>
+
+      <aside class="control-panel" aria-label="Experiment controls">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Environment</p>
+            <h2>Boundary conditions</h2>
+          </div>
+          <span id="engine-badge" class="engine-badge"><i></i> Initializing</span>
+        </div>
+
+        <div class="preset-row" role="group" aria-label="Environment presets">
+          <button class="preset is-active" type="button" data-preset="kitchen" aria-pressed="true">Kitchen</button>
+          <button class="preset" type="button" data-preset="summer" aria-pressed="false">Summer sun</button>
+          <button class="preset" type="button" data-preset="cold" aria-pressed="false">Cold stone</button>
+          <button class="preset" type="button" data-preset="pan" aria-pressed="false">Warm pan</button>
+        </div>
+
+        <section class="control-section">
+          <label class="range-control" for="ambient-temp">
+            <span><b>Room temperature</b><output id="ambient-temp-out">22.0 °C</output></span>
+            <input id="ambient-temp" type="range" min="5" max="45" step="0.5" value="22" />
+          </label>
+
+          <label class="range-control" for="surface-temp">
+            <span><b>Surface temperature</b><output id="surface-temp-out">22.0 °C</output></span>
+            <input id="surface-temp" type="range" min="0" max="85" step="0.5" value="22" />
+          </label>
+
+          <label class="range-control" for="airflow">
+            <span><b>Airflow</b><output id="airflow-out">0.2 m/s</output></span>
+            <input id="airflow" type="range" min="0" max="4" step="0.1" value="0.2" />
+          </label>
+
+          <label class="range-control" for="sunlight">
+            <span><b>Direct sunlight</b><output id="sunlight-out">0 W/m²</output></span>
+            <input id="sunlight" type="range" min="0" max="1000" step="10" value="0" />
+          </label>
+
+          <label class="range-control" for="tilt">
+            <span><b>Counter tilt</b><output id="tilt-out">0.0°</output></span>
+            <input id="tilt" type="range" min="-12" max="12" step="0.25" value="0" />
+          </label>
+        </section>
+
+        <section class="control-section material-section">
+          <div class="section-label">
+            <span>
+              <b>Contact surface</b>
+              <small>Changes conduction, thermal inertia, empirical surface mobility, and appearance.</small>
+            </span>
+          </div>
+          <div class="material-grid" role="group" aria-label="Countertop material">
+            <button class="material is-active" data-material="marble" type="button" aria-pressed="true">
+              <i class="swatch marble"></i><span>Marble<small>high inertia</small></span>
+            </button>
+            <button class="material" data-material="steel" type="button" aria-pressed="false">
+              <i class="swatch steel"></i><span>Steel<small>fast contact</small></span>
+            </button>
+            <button class="material" data-material="wood" type="button" aria-pressed="false">
+              <i class="swatch wood"></i><span>Walnut<small>insulating</small></span>
+            </button>
+            <button class="material" data-material="ceramic" type="button" aria-pressed="false">
+              <i class="swatch ceramic"></i><span>Ceramic<small>balanced</small></span>
+            </button>
+          </div>
+        </section>
+
+        <section class="control-section heater-section">
+          <div class="section-label">
+            <span>
+              <b>Localized heater</b>
+              <small>Enable, then drag over the countertop to apply a measured heat flux.</small>
+            </span>
+            <button id="heater-toggle" class="switch" type="button" role="switch" aria-label="Localized heater" aria-checked="false"><i></i></button>
+          </div>
+          <label class="range-control compact" for="heater-power">
+            <span><b>Heat flux</b><output id="heater-power-out">3.0 kW/m²</output></span>
+            <input id="heater-power" type="range" min="0.5" max="12" step="0.25" value="3" disabled />
+          </label>
+        </section>
+
+        <section class="control-section quality-section">
+          <div class="section-label">
+            <span>
+              <b>Compute profile</b>
+              <small id="quality-copy" role="status" aria-live="polite">Balanced for GTX 1660 Ti · 6 GB</small>
+            </span>
+          </div>
+          <div class="quality-row" role="group" aria-label="Simulation quality">
+            <button class="quality" data-quality="efficient" type="button" aria-pressed="false">Efficient</button>
+            <button class="quality is-active" data-quality="balanced" type="button" aria-pressed="true">Balanced</button>
+            <button class="quality" data-quality="high" type="button" aria-pressed="false">High</button>
+          </div>
+        </section>
+      </aside>
+
+      <section class="telemetry" aria-label="Live experiment telemetry">
+        <div class="metric primary">
+          <span>Butter temperature</span>
+          <strong id="metric-temp">7.0<small>°C</small></strong>
+          <em id="metric-core">core 7.0 °C</em>
+        </div>
+        <div class="metric">
+          <span>Transition enthalpy</span>
+          <strong id="metric-melt">0.0<small>%</small></strong>
+          <em id="metric-state">crystal network intact</em>
+        </div>
+        <div class="metric">
+          <span>Mass balance</span>
+          <strong id="metric-mass">100.0<small>%</small></strong>
+          <em id="metric-grams">— g modeled</em>
+        </div>
+        <div class="metric">
+          <span>Wetted footprint</span>
+          <strong id="metric-area">—<small>cm²</small></strong>
+          <em id="metric-spread">no measurable spread</em>
+        </div>
+        <div class="history-card">
+          <div class="history-label">
+            <span>Thermal history</span>
+            <em id="metric-eta">estimating transition time</em>
+          </div>
+          <canvas id="history-canvas" width="300" height="74" aria-label="Butter temperature and melt history chart"></canvas>
+        </div>
+      </section>
+
+      <div class="transport-controls">
+        <button id="reset-button" class="transport secondary" type="button">Reset</button>
+        <button id="play-button" class="transport primary" type="button"><span id="play-icon" aria-hidden="true">Ⅱ</span><b id="play-label">Pause</b></button>
+        <label for="time-scale">
+          <span>Time scale</span>
+          <select id="time-scale">
+            <option value="1">1× real time</option>
+            <option value="10">10×</option>
+            <option value="30" selected>30×</option>
+            <option value="60">60×</option>
+          </select>
+        </label>
+        <span class="sim-clock" id="sim-clock">00:00.0</span>
+      </div>
+
+      <p id="canvas-help" class="canvas-instructions">
+        Arrows: orbit <span>·</span> Shift + arrows: heater <span>·</span> +/−: zoom <span>·</span> Space: run/pause
+      </p>
+
+      <button id="science-button" class="science-button" type="button">Model &amp; assumptions</button>
+
+      <dialog id="science-dialog">
+        <form method="dialog">
+          <button class="dialog-close" aria-label="Close">×</button>
+          <p class="eyebrow">What is being solved</p>
+          <h2>Matter first, pixels second.</h2>
+          <p>
+            BL–05 evolves shared-face butter thickness and eight vertical enthalpy layers on the GPU. Heat arrives through implicit contact,
+            forced convection, long-wave radiation, and partitioned solar absorption. A literature-informed solid-fat prior controls the
+            crystal network, yield stress, and viscosity; the puddle moves through a conservative, positivity-preserving shallow flux.
+          </p>
+          <div class="equation">ρ ∂H/∂t = ∇·(k∇T) + q″ &nbsp;&nbsp; · &nbsp;&nbsp; ∂h/∂t = −∇·q</div>
+          <p class="fine-print">
+            This is a physically grounded educational approximation calibrated from published butter and milk-fat data—not a certified
+            food-process model. The adaptive flow step reports when its positivity limiter is active; capillary contact-angle dynamics remain
+            outside this release. Composition, crystal history, water fraction, and surface condition vary between real butter samples.
+          </p>
+          <a href="./SOURCES.md" target="_blank" rel="noreferrer">Open the source and calibration ledger →</a>
+        </form>
+      </dialog>
+
+      <div id="boot-overlay" class="boot-overlay" role="status" aria-live="polite">
+        <div class="boot-card">
+          <div class="boot-orbit" aria-hidden="true"><i></i><i></i><i></i></div>
+          <p class="eyebrow">BL–05 GPU laboratory</p>
+          <h2>Preparing the material state</h2>
+          <p id="boot-status">Requesting a high-performance WebGPU adapter…</p>
+          <div class="boot-progress"><i id="boot-progress"></i></div>
+        </div>
+      </div>
+
+      <div id="error-panel" class="error-panel" role="alert" tabindex="-1" hidden>
+        <p class="eyebrow">WebGPU unavailable</p>
+        <h2>This lab needs Chrome or Edge with GPU acceleration.</h2>
+        <p id="error-copy"></p>
+        <button id="retry-button" type="button">Retry initialization</button>
+      </div>
+    </main>
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>
