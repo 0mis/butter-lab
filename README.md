@@ -29,18 +29,18 @@ Chrome or Edge hardware acceleration must be enabled. The app asks Windows for t
 Each GPU cell stores butter thickness, a live substrate temperature, and eight vertical specific-enthalpy layers. Every adaptive substep computes:
 
 1. one unique hydrostatic/tilt flux for every shared cell face;
-2. one aggregate donor scale that preserves nonnegative height without deleting mass;
-3. phase-dependent Bingham-style yield and viscosity;
-4. shared-face horizontal conduction and stable pairwise vertical conduction;
-5. implicit, equal-and-opposite contact exchange with a finite thermal substrate;
-6. implicit convection/radiation and a single butter/substrate sunlight budget;
-7. conservative upwind enthalpy advection with the moving butter.
+2. donor and receiver scales that preserve mass, nonnegative height, and the local hydraulic-head maximum;
+3. a bounded face exchange that prevents explicit thin-film flow from reversing a cell-to-cell height jump;
+4. phase-dependent Bingham-style yield and viscosity using only the thermally mobile share of the eight-layer column;
+5. mobile-layer-weighted enthalpy advection instead of moving the still-solid crystal network as liquid;
+6. shared-face horizontal conduction, stable vertical conduction, and implicit equal-and-opposite substrate contact;
+7. implicit convection/radiation and a single butter/substrate sunlight budget.
 
 When raw flow would outrun the explicit grid, BL-05 reduces the physical timestep and advances the displayed simulation clock only by the time actually solved. The engine badge shows `flow ×…` while that safeguard is active.
 
 The energy-transition curve uses three published milk-fat DSC peaks. A separate solid-fat-content curve controls mechanical strength; this distinction prevents the common mistake of treating calorimetric transition fraction as literal liquid mass fraction.
 
-The renderer reads the same GPU material field used by the solver. It draws the evolving top heightfield plus procedural cut walls at the butter/air boundary. Surface-layer temperature and crystal state drive a pale emulsion albedo, waxy-to-oily roughness, restrained microstructure, thin-edge scattering, and Fresnel sheen under a neutral studio light. Camera, Thermal, and Structure views are different renderings of one evolving state—there are no image crossfades or scripted melt animations.
+The renderer reads the same GPU material field used by the solver. It reconstructs the cell-averaged top field with a compact tent filter and draws cut walls only where a coherent solid edge meets a dry neighbor; liquid-to-liquid gradients stay continuous instead of becoming vertical fences. Surface-layer temperature and crystal state drive a pale emulsion albedo, waxy-to-oily roughness, restrained microstructure, thin-edge scattering, and Fresnel sheen under a neutral studio light. Camera, Thermal, and Structure views are different renderings of one evolving state—there are no image crossfades or scripted melt animations.
 
 ## Controls
 

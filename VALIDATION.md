@@ -10,6 +10,10 @@ Validation date: 2026-07-10 on the target HP OMEN laptop.
   - the compact GPU inverse stays within its stated interpolation tolerance;
   - all three live grids initialize to 135.00 g and a consistent measured footprint;
   - aggregate donor scaling keeps a four-face adversarial update nonnegative and mass-conservative;
+  - mobile depth grows layer by layer instead of switching the whole 19 mm block to liquid flow;
+  - bounded face exchange cannot reverse a height jump or turn one peak into a checkerboard trough;
+  - receiver scaling prevents four simultaneous donors from creating a new local maximum;
+  - mobile-layer enthalpy weights sum to one and conserve their shared-face energy flux;
   - horizontal heat exchange is pairwise conservative and zero across a wet/dry face;
   - nonlinear contact exchange is monotone and equal-and-opposite from 0.1 µm to 20 mm films;
   - butter plus substrate solar absorption never exceeds incident irradiance;
@@ -19,24 +23,24 @@ Validation date: 2026-07-10 on the target HP OMEN laptop.
 - Every live WGSL entry point passed semantic validation and HLSL lowering with official Dawn/Tint `v20260423.175430`:
   - `computeRawFaces`
   - `computeDonorScale`
+  - `computeReceiverScale`
   - `simulate`
   - `backgroundVertex`
   - `backgroundFragment`
   - `butterVertex`
   - `butterWallVertex`
   - `butterFragment`
-- All eight lowered entry points passed Shader Model 6.0 validation through Chrome 150's `dxcompiler.dll`.
+- All nine lowered entry points passed Shader Model 6.0 validation through Chrome 150's `dxcompiler.dll`.
 - The complete 1600×900 interface was rendered and visually inspected through the `?ui-preview` QA route after the realism pass. The butter now uses a flat cut-block silhouette, restrained pale material, subtle knife texture, vertical faces, and an anchored contact shadow rather than the earlier playful wedge.
+- The corrected compute and render paths were exercised interactively on the GTX 1660 Ti in Chrome 150 with the Warm pan preset at 60×. At 01:47 simulated time the block showed a smooth basal puddle at 16% transition; at 05:54 it formed a continuous late-stage puddle at 91% transition. Mass remained 100.00%, all pipelines stayed live, and the browser console reported no warnings or errors. The former cell-pillar/vertical-fence failure did not recur.
 
-## Environment limitation
+## Interactive hardware acceptance
 
-Current Chromium headless processes on this Windows 26H1 preview build do not expose the installed D3D12 WebGPU adapter reliably. The final isolated Edge headless attempt reached the app's explicit “No compatible WebGPU adapter” path; this is a browser/headless-adapter limitation, not a shader parse failure. The installed interactive Chrome/Edge builds, GTX 1660 Ti, driver 592.27, and Direct3D 12 are the intended runtime.
-
-The visible interactive browser profile was not modified during automated QA. The one-click launcher is therefore the final real-hardware acceptance check: it reports either `WebGPU · n fps` (plus `flow ×…` when the adaptive timestep is active) or a focused, retryable initialization error. Shader semantics and DirectX lowering were validated independently.
+Chrome 150 created the D3D12 adapter, all four compute pipelines, all render pipelines, and 4× MSAA Photo pipelines on the target GTX 1660 Ti. Interactive testing reached 44 fps during the accelerated mid-melt inspection; the most computationally expensive 91% liquid state remained responsive while the test harness captured telemetry and a full-frame image.
 
 ## Modeling limits
 
-The current flow solve is conservative and positivity-preserving, but it is an educational shallow-volume approximation. Explicit capillary pressure/contact-angle dynamics are intentionally disabled until an implicit solver and convergence criterion are added. The engine exposes limiter activity and advances the simulation clock only by time actually computed; it does not silently claim an unresolved accelerated timestep.
+The current flow solve is conservative, positivity-preserving, and receiver-bounded, but it remains an educational shallow-volume approximation. Explicit capillary pressure/contact-angle dynamics are intentionally disabled until an implicit surface-energy solver and convergence criterion are added. A compact render reconstruction smooths cell-averaged geometry; it does not claim to be a capillary physics solve. The engine exposes limiter activity and advances the simulation clock only by time actually computed.
 
 ## Reproduction commands
 

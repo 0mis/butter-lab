@@ -39,7 +39,10 @@ These values are calibration starting points. They are not universal constants f
 
 ## Numerical treatment in this release
 
-- Mass and the eight transported layer enthalpies use the same unique shared-face flux. One aggregate donor factor per cell limits total outflow to 90% of its available height, so the positivity safeguard does not clip or delete a column.
+- Herson et al., [Dripping Thin Films for Real-time Digital Painting](https://eliemichel.github.io/dripping-thin-films/documents/herson26dripping_thin_films.pdf) — the current real-time reference for shared-edge thin-film transport that constrains both donor availability and receiver capacity. BL-05 adapts that idea to a hydraulic-head bound on its regular WebGPU grid.
+- Vantzos et al., [Real-Time Viscous Thin Films](https://mirelabc.github.io/publications/rtvtf.pdf) — mass-preserving, nonnegative GPU thin-film evolution and the longer-term reference for adding a controlled surface-energy solve.
+- Mass uses one signed flux per shared face. A 50% mobile-depth donor bound, a tilt-aware receiver bound, and a local monotone face budget prevent both negative columns and new grid-scale towers without clipping or deleting mass.
+- Each thermal layer receives a normalized mechanical-fluidity weight. Flow mobility uses the equivalent mobile depth rather than total block height cubed, and transported enthalpy comes preferentially from those mobile layers while remaining conservative across a shared face.
 - The displayed simulation clock advances only by the timestep actually dispatched. Telemetry feeds limiter activity back into the next timestep; the engine badge exposes this as `flow ×…` instead of silently claiming the requested acceleration.
 - Horizontal conduction uses the common overlap thickness at each face and is antisymmetric. Vertical layer exchange uses a stable pair relaxation. Countertop/butter contact is a nonlinear backward-Euler, equal-and-opposite energy transfer.
 - Sunlight is partitioned once using a Beer–Lambert-style optical depth: absorbed butter energy plus transmitted/absorbed substrate energy never exceeds incident irradiance.
