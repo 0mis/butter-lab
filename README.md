@@ -1,6 +1,22 @@
-# Butter Lab BL-05
+# Butter Lab
 
-**Live experiment:** [https://0mis.github.io/butter-lab/](https://0mis.github.io/butter-lab/)
+A real-time WebGPU experiment in heat transfer, phase transition, and conservative flow. Built as an independent, AI-assisted portfolio project.
+
+**[Open the live lab](https://0mis.github.io/butter-lab/)** · **[Read the validation](VALIDATION.md)** · **[Inspect the physics model](src/physics-model.js)**
+
+![Butter Lab interface with a melting butter block and simulation controls](artifacts/ButterLab-preview.png)
+
+## What to inspect
+
+| Area | Source |
+| --- | --- |
+| Numerical model and physical constraints | [Physics reference model](src/physics-model.js) and [regression checks](tests/physics.test.mjs) |
+| GPU simulation and rendering | [WebGPU engine](src/webgpu-engine.js) and [WGSL shaders](src/shaders.js) |
+| Interface and portable startup checks | [Application](src/app.js), [camera checks](tests/math.test.mjs), and [static contracts](tests/static.test.mjs) |
+
+The browser runs the simulation without runtime dependencies. A supported WebGPU browser is required. The model is an educational approximation; calibration sources and omitted physics are documented in [SOURCES.md](SOURCES.md) and the scope section below.
+
+## Validated environment
 
 BL-05 is a GPU-accelerated butter-melting laboratory tuned and validated on this computer:
 
@@ -81,4 +97,4 @@ node .\tests\static.test.mjs
 node .\tests\export-shaders.mjs
 ```
 
-Codex used its bundled Node runtime because the machine's system Node registration is stale and the executable is missing.
+These commands exercise the JavaScript reference model and static contracts. Interactive GPU validation and hardware limits are documented in [VALIDATION.md](VALIDATION.md).
